@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+# Archivos de salida y datos generados
+*.xlsx
+*.txt
+!requirements.txt
