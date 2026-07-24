@@ -74,3 +74,23 @@ Una vez abierta la interfaz:
 3. Haz clic en **⚡ Extraer TXT y Excel** para generar los archivos estructurados en la ruta que desees.
 4. Si necesitas analizar egresos primero, haz clic en **🔄 Reorganizar Excel** (esto moverá los egresos a la parte superior).
 5. Haz clic en **🟢 Abrir Excel** para revisar el resultado final.
+
+---
+
+## 📌 Control de Versiones y Empaquetado
+
+Este proyecto adopta **Semantic Versioning (SemVer)** para gestionar las versiones del programa de forma ordenada y siguiendo las mejores prácticas de la industria.
+
+* **Versión Actual:** `v1.0.0`
+* **Historial de Cambios:** Todos los cambios detallados de cada versión se encuentran en el archivo [CHANGELOG.md](file:///c:/Users/USUARIO/Desktop/Proyectos/extractos_pdf/CHANGELOG.md).
+
+### 📦 Compilación a Ejecutable (.exe)
+El código de la versión actual está estructurado y optimizado para ser empaquetado en un archivo ejecutable `.exe` independiente (utilizando herramientas como `PyInstaller`). 
+
+> **Estado Actual:** El empaquetado y la distribución directa del binario `.exe` **no están disponibles todavía** para descarga en este repositorio (actualmente en desarrollo). 
+> 
+> Si deseas generar el archivo ejecutable de forma local, puedes preparar el entorno e iniciar la compilación con el siguiente comando:
+> ```bash
+> pip install pyinstaller
+> pyinstaller --noconfirm --onefile --windowed --name="LectorExtractorBancolombia" app_gui.py
+> ```

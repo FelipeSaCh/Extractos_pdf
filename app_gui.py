@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from pdf_engine import PDFEngine
+from version import __version__
 
 try:
     from script import ejecutar_proceso_exportacion, reorganizar_excel
@@ -15,7 +16,7 @@ except ImportError as err:
 class PDFViewerApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Lector y Extractor Bancolombia - Tkinter")
+        self.root.title(f"Lector y Extractor Bancolombia v{__version__} - Tkinter")
         self.root.geometry("1050x700")
 
         self.pdf_engine = PDFEngine()

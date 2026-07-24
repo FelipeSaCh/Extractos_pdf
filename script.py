@@ -97,7 +97,7 @@ def pdf_a_texto_delimitado(pdf_path):
 
 
 def texto_delimitado_a_excel(lineas_texto, output_excel_path):
-    columnas = ["FECHA", "DESCRIPCIÓN", "SUCURSAL", "DCTO.", "VALOR", "SALDO"]
+    columnas = ["FECHA", "DESCRIPCION", "SUCURSAL", "DCTO.", "VALOR", "SALDO"]
     registros = []
 
     for linea in lineas_texto:
@@ -105,7 +105,7 @@ def texto_delimitado_a_excel(lineas_texto, output_excel_path):
         if len(partes) == len(columnas):
             registros.append({
                 "FECHA": partes[0],
-                "DESCRIPCIÓN": partes[1],
+                "DESCRIPCION": partes[1],
                 "SUCURSAL": partes[2],
                 "DCTO.": partes[3],
                 "VALOR": partes[4],
@@ -132,7 +132,7 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
 
     encabezado_txt = DELIMITADOR.join([
         "FECHA",
-        "DESCRIPCIÓN",
+        "DESCRIPCION",
         "SUCURSAL",
         "DCTO.",
         "VALOR",
@@ -151,9 +151,10 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
 
 
 def reorganizar_excel(excel_path):
-    """
-    Reorganiza las filas del archivo Excel de modo que los valores negativos o 
-    que comiencen con '-' en la columna 'VALOR' queden en la parte superior.
+    """Reorganiza el archivo Excel enviando los valores negativos a la parte superior,
+
+    convierte la columna 'VALOR' a formato numérico real y guarda los resultados
+    en tres hojas: 'Datos', 'Resumen' y 'Conceptos'.
     """
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"No se encontró el archivo: {excel_path}")
@@ -163,26 +164,54 @@ def reorganizar_excel(excel_path):
     if "VALOR" not in df.columns:
         raise KeyError("La columna 'VALOR' no existe en el archivo Excel.")
 
-    is_negative = df["VALOR"].astype(str).str.strip().str.contains("-", na=False)
+    if "DESCRIPCION" not in df.columns:
+        raise KeyError(
+            "La columna 'DESCRIPCION' no existe en el archivo Excel."
+        )
 
+    # 1. Identificar valores negativos antes de la ordenación
+    is_negative = (
+        df["VALOR"].astype(str).str.strip().str.contains("-", na=False)
+    )
     df["_orden_temp"] = 0
     df.loc[~is_negative, "_orden_temp"] = 1
 
-    
+    df_ordenado = df.sort_values(by="_orden_temp", kind="stable").drop(
+        columns=["_orden_temp"]
+    )
 
-    df_ordenado = df.sort_values(by="_orden_temp", kind="stable").drop(columns=["_orden_temp"])
-    suma=pd.to_numeric(df_ordenado["VALOR"].str.replace(",", "").str.replace("$", ""), errors='coerce')
-    df_ordenado["CONSILIACION"] = suma[suma<0].sum()
-    df_ordenado.to_excel(excel_path, index=False)
+    # 2. Limpiar y convertir la columna 'VALOR' a tipo numérico (float)
+    #    - Se eliminan comas ',' y símbolos de peso '$'
+    #    - Valores como '.34' o '-.50' son convertidos automáticamente a '0.34' o '-0.50'
+    df_ordenado["VALOR"] = pd.to_numeric(
+        df_ordenado["VALOR"]
+        .astype(str)
+        .str.replace(",", "", regex=False)
+        .str.replace("$", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    )
 
-    
-    wb=openpyxl.load_workbook(excel_path)
-    new_wb="Resumen"
+    # 3. Crear DataFrame de conciliación (Resumen)
+    df_conciliacion = pd.DataFrame(
+        {
+            "CARGOS": [df_ordenado.loc[df_ordenado["VALOR"] < 0, "VALOR"].sum()],
+            "ABONOS": [df_ordenado.loc[df_ordenado["VALOR"] > 0, "VALOR"].sum()],
+        }
+    )
 
-    if new_wb not in wb.sheetnames:
-        wb.create_sheet(title=new_wb)
-    wb.save(excel_path)
-    wb.close()
+    # 4. Crear DataFrame agrupado por concepto
+    df_conceptos = (
+        df_ordenado.groupby("DESCRIPCION", as_index=False)["VALOR"]
+        .sum()
+        .rename(columns={"VALOR": "VALOR_TOTAL"})
+    )
+
+    # 5. Guardar las tres hojas en el archivo de Excel
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+        df_ordenado.to_excel(writer, sheet_name="Datos", index=False)
+        df_conciliacion.to_excel(writer, sheet_name="Resumen", index=False)
+        df_conceptos.to_excel(writer, sheet_name="Conceptos", index=False)
 
     return excel_path
 
