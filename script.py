@@ -2,6 +2,7 @@ import os
 import re
 import pandas as pd
 import pdfplumber
+import openpyxl
 
 DELIMITADOR = "|||"
 
@@ -167,8 +168,22 @@ def reorganizar_excel(excel_path):
     df["_orden_temp"] = 0
     df.loc[~is_negative, "_orden_temp"] = 1
 
+    
+
     df_ordenado = df.sort_values(by="_orden_temp", kind="stable").drop(columns=["_orden_temp"])
+    suma=pd.to_numeric(df_ordenado["VALOR"].str.replace(",", "").str.replace("$", ""), errors='coerce')
+    df_ordenado["CONSILIACION"] = suma[suma<0].sum()
     df_ordenado.to_excel(excel_path, index=False)
+
+    
+    wb=openpyxl.load_workbook(excel_path)
+    new_wb="Resumen"
+
+    if new_wb not in wb.sheetnames:
+        wb.create_sheet(title=new_wb)
+    wb.save(excel_path)
+    wb.close()
+
     return excel_path
 
 

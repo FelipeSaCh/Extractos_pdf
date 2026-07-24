@@ -84,6 +84,7 @@ class PDFViewerApp:
 
         self.tab_pdf = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_pdf, text="  Vista Previa PDF  ")
+        
 
         self.canvas = tk.Canvas(self.tab_pdf, bg="#525659")
         scrollbar = ttk.Scrollbar(
