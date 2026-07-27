@@ -47,10 +47,10 @@ def extraer_lineas_movimientos(pdf_path):
 
             anc_pagina = page.width
             x_max_desc = anc_pagina * 0.35
-            x_max_sucursal = anc_pagina * 0.51
-            x_max_ref1 = anc_pagina * 0.64
-            x_max_ref2 = anc_pagina * 0.75
-            x_max_doc = anc_pagina * 0.85
+            x_max_sucursal = anc_pagina * 0.50
+            x_max_ref1 = anc_pagina * 0.63
+            x_max_ref2 = anc_pagina * 0.73
+            x_max_doc = anc_pagina * 0.85  # Todo lo que esté a la derecha de 0.85 es la columna VALOR
 
             filas_y = {}
             for w in words:
@@ -77,37 +77,22 @@ def extraer_lineas_movimientos(pdf_path):
                     if tx_actual:
                         transacciones_pagina.append(tx_actual)
 
-                    fecha_val = texto_primera
-                    resto_words = words_linea[1:]
-
-                    valor_val = ""
-                    if len(resto_words) > 0 and es_numero_financiero(
-                        resto_words[-1]["text"]
-                    ):
-                        valor_val = resto_words.pop(-1)["text"]
-
                     tx_actual = {
-                        "FECHA": fecha_val,
+                        "FECHA": texto_primera,
                         "DESCRIPCIÓN": [],
                         "SUCURSAL/CANAL": [],
                         "REFERENCIA 1": [],
                         "REFERENCIA 2": [],
                         "DOCUMENTO": [],
-                        "VALOR": valor_val,
+                        "VALOR": "",
                     }
-                    words_a_procesar = resto_words
-
+                    words_a_procesar = words_linea[1:]
                 else:
                     if not tx_actual:
                         continue
                     words_a_procesar = words_linea
 
-                    if not tx_actual["VALOR"] and len(words_a_procesar) > 0:
-                        if es_numero_financiero(words_a_procesar[-1]["text"]):
-                            tx_actual["VALOR"] = words_a_procesar.pop(-1)[
-                                "text"
-                            ]
-
+                # Asignación estricta por coordenadas X
                 for w in words_a_procesar:
                     x_centro = (w["x0"] + w["x1"]) / 2.0
                     txt_w = w["text"]
@@ -120,8 +105,11 @@ def extraer_lineas_movimientos(pdf_path):
                         tx_actual["REFERENCIA 1"].append(txt_w)
                     elif x_centro < x_max_ref2:
                         tx_actual["REFERENCIA 2"].append(txt_w)
-                    else:
+                    elif x_centro < x_max_doc:
                         tx_actual["DOCUMENTO"].append(txt_w)
+                    else:
+                        # Columna final: VALOR
+                        tx_actual["VALOR"] = txt_w
 
             if tx_actual:
                 transacciones_pagina.append(tx_actual)
@@ -151,7 +139,6 @@ def extraer_lineas_movimientos(pdf_path):
                 lineas_delimitadas.append(DELIMITADOR.join(registro))
 
     return lineas_delimitadas
-
 
 # ==============================================================================
 # PARSER 2: EXTRACTOS

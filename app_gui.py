@@ -1,8 +1,9 @@
 import os
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 from pdf_engine import PDFEngine
+from PIL import Image, ImageTk
 from version import __version__
 
 try:
@@ -14,7 +15,7 @@ except ImportError as err:
 
 
 # ------------------------------------------------------------------
-# Paleta y constantes visuales (solo presentación, no afecta lógica)
+# Paleta y constantes visuales
 # ------------------------------------------------------------------
 COLOR_BG = "#F4F6F8"
 COLOR_SIDEBAR = "#FFFFFF"
@@ -34,6 +35,7 @@ FONT_STATUS = ("Segoe UI", 9, "bold")
 
 
 class PDFViewerApp:
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"Lector de extractos v{__version__} - Tkinter")
@@ -47,9 +49,6 @@ class PDFViewerApp:
         self._apply_styles()
         self._build_ui()
 
-    # ------------------------------------------------------------------
-    # Utilidades visuales
-    # ------------------------------------------------------------------
     def _center_window(self):
         self.root.update_idletasks()
         w, h = 1100, 720
@@ -101,7 +100,6 @@ class PDFViewerApp:
             font=("Segoe UI", 8),
         )
 
-        # Botón primario (acción principal de carga)
         style.configure(
             "Primary.TButton",
             font=FONT_BUTTON,
@@ -113,11 +111,13 @@ class PDFViewerApp:
         )
         style.map(
             "Primary.TButton",
-            background=[("active", COLOR_PRIMARY_DARK), ("disabled", "#B9C6E4")],
+            background=[
+                ("active", COLOR_PRIMARY_DARK),
+                ("disabled", "#B9C6E4"),
+            ],
             foreground=[("disabled", "#F0F0F0")],
         )
 
-        # Botón secundario (acciones dependientes)
         style.configure(
             "Secondary.TButton",
             font=FONT_BUTTON,
@@ -133,16 +133,8 @@ class PDFViewerApp:
         )
 
         style.configure("TPanedwindow", background=COLOR_BG)
-        style.configure(
-            "TNotebook",
-            background=COLOR_BG,
-            borderwidth=0,
-        )
-        style.configure(
-            "TNotebook.Tab",
-            font=FONT_BUTTON,
-            padding=(16, 8),
-        )
+        style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
+        style.configure("TNotebook.Tab", font=FONT_BUTTON, padding=(16, 8))
         style.map(
             "TNotebook.Tab",
             background=[("selected", "white")],
@@ -164,7 +156,11 @@ class PDFViewerApp:
             foreground=COLOR_TEXT,
             padding=6,
         )
-        style.map("Treeview", background=[("selected", COLOR_PRIMARY)], foreground=[("selected", "white")])
+        style.map(
+            "Treeview",
+            background=[("selected", COLOR_PRIMARY)],
+            foreground=[("selected", "white")],
+        )
 
     def _build_warning_box(self, parent):
         warning_frame = tk.Frame(
@@ -179,11 +175,10 @@ class PDFViewerApp:
         warning_label = tk.Label(
             warning_frame,
             text=(
-                "⚠️ Recuerde que este programa únicamente puede usarse con archivos "
-                "PDF que contengan texto (no imágenes escaneadas), y que el soporte "
-                "actual es exclusivo para extractos con el formato de Bancolombia. "
-                "No se garantiza compatibilidad con otros bancos u otros formatos. "
-                "En futuras actualizaciones se trabajará en su estructuración."
+                "⚠️ Recuerde que este programa únicamente puede usarse con"
+                " archivos PDF que contengan texto (no imágenes escaneadas), y"
+                " que el soporte actual es exclusivo para extractos con el"
+                " formato de Bancolombia."
             ),
             bg="#FDECEA",
             fg="#D93025",
@@ -202,17 +197,32 @@ class PDFViewerApp:
         paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # ============= PANEL IZQUIERDO: Controles =============
-        left_frame = ttk.Frame(paned_window, width=270, padding=20, style="Sidebar.TFrame")
+        # ============= PANEL IZQUIERDO =============
+        left_frame = ttk.Frame(
+            paned_window, width=270, padding=20, style="Sidebar.TFrame"
+        )
         left_frame.pack_propagate(False)
         paned_window.add(left_frame, weight=1)
 
-        title_label = ttk.Label(
-            left_frame,
-            text="📊 Panel de Control",
-            style="Title.TLabel",
-        )
-        title_label.pack(anchor="w", pady=(0, 2))
+        base_dir = os.path.dirname(__file__)
+        logo_path = os.path.join(base_dir, "assets", "img", "logo.png")
+
+        if os.path.exists(logo_path):
+            icon_image_pil = Image.open(logo_path).resize((24, 24))
+            self.icon_title = ImageTk.PhotoImage(icon_image_pil)
+            title_label = ttk.Label(
+                left_frame,
+                text=" Panel de Control",
+                image=self.icon_title,
+                compound=tk.LEFT,
+                style="Title.TLabel",
+            )
+        else:
+            title_label = ttk.Label(
+                left_frame, text=" Panel de Control", style="Title.TLabel"
+            )
+
+        title_label.pack(anchor="w", padx=10, pady=5)
 
         subtitle_label = ttk.Label(
             left_frame,
@@ -221,8 +231,9 @@ class PDFViewerApp:
         )
         subtitle_label.pack(anchor="w", pady=(0, 18))
 
-        ttk.Separator(left_frame, orient="horizontal").pack(fill=tk.X, pady=(0, 18))
-
+        ttk.Separator(left_frame, orient="horizontal").pack(
+            fill=tk.X, pady=(0, 18)
+        )
         self._build_warning_box(left_frame)
 
         btn_load = ttk.Button(
@@ -242,7 +253,6 @@ class PDFViewerApp:
             cursor="hand2",
         )
         btn_load_movimientos.pack(fill=tk.X, pady=6)
-        
 
         self.btn_process = ttk.Button(
             left_frame,
@@ -276,7 +286,9 @@ class PDFViewerApp:
 
         ttk.Separator(left_frame, orient="horizontal").pack(fill=tk.X, pady=18)
 
-        status_header = ttk.Label(left_frame, text="ESTADO", style="Subtitle.TLabel")
+        status_header = ttk.Label(
+            left_frame, text="ESTADO", style="Subtitle.TLabel"
+        )
         status_header.pack(anchor="w", pady=(0, 6))
 
         self.info_label = ttk.Label(
@@ -288,7 +300,6 @@ class PDFViewerApp:
         )
         self.info_label.pack(anchor="w", fill=tk.X)
 
-        # Empuja el footer hacia abajo
         spacer = ttk.Frame(left_frame, style="Sidebar.TFrame")
         spacer.pack(fill=tk.BOTH, expand=True)
 
@@ -299,67 +310,57 @@ class PDFViewerApp:
         )
         footer_label.pack(anchor="w", side=tk.BOTTOM, pady=(10, 0))
 
-        # ============= PANEL DERECHO: Visualizador =============
+        # ============= PANEL DERECHO =============
         right_frame = ttk.Frame(paned_window, style="Content.TFrame")
         paned_window.add(right_frame, weight=4)
 
         self.notebook = ttk.Notebook(right_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
+        # 1. Pestaña de Vista Previa PDF
         self.tab_pdf = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_pdf, text="  📄 Vista Previa PDF  ")
 
-        self.canvas = tk.Canvas(self.tab_pdf, bg=COLOR_CANVAS_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(
+        # Scrollbar y Canvas empaquetados explícitamente
+        scrollbar = ttk.Scrollbar(self.tab_pdf, orient=tk.VERTICAL)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.canvas = tk.Canvas(
             self.tab_pdf,
-            orient=tk.VERTICAL,
-            command=self.canvas.yview
+            bg=COLOR_CANVAS_BG,
+            highlightthickness=0,
+            yscrollcommand=scrollbar.set,
+        )
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scrollbar.config(command=self.canvas.yview)
+
+        # Frame contenedor interno para las páginas del PDF
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        self.canvas_window = self.canvas.create_window(
+            (0, 0), window=self.scrollable_frame, anchor="nw"
         )
 
-        self.scrollable_frame = ttk.Frame(self.canvas)
+        # Eventos para ajustar el scrollbar y permitir la rueda del ratón
         self.scrollable_frame.bind(
             "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            ),
         )
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 
+        # 2. Pestaña de Excel Generado
         self.tab_excel = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_excel, text="  📈 Excel Generado  ")
 
-        tree_container = ttk.Frame(self.tab_excel, style="Content.TFrame")
-        tree_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-
-        self.tree_excel = ttk.Treeview(
-            tree_container,
-            columns=("FECHA", "DESCRIPCION", "SUCURSAL", "DCTO.", "VALOR", "SALDO"),
-            show="headings",
-        )
-        scrollbar_excel = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree_excel.yview)
-        self.tree_excel.configure(yscrollcommand=scrollbar_excel.set)
-        self.tree_excel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar_excel.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-        scrollbar_x = ttk.Scrollbar(self.tab_excel, orient=tk.HORIZONTAL, command=self.tree_excel.xview)
-        self.tree_excel.configure(xscrollcommand=scrollbar_x.set)
-        scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
-
-        # Filas alternadas (zebra) para mejorar la lectura de la tabla
-        self.tree_excel.tag_configure("odd", background="#F7F9FC")
-        self.tree_excel.tag_configure("even", background="white")
+        self.notebook_hojas = ttk.Notebook(self.tab_excel)
+        self.notebook_hojas.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
     # ------------------------------------------------------------------
-    # Lógica de la aplicación (sin cambios funcionales)
+    # Lógica y Eventos
     # ------------------------------------------------------------------
     def cargar_y_procesar_pdf(self, prefijo_tipo):
-        """Abre el diálogo de archivos, renombra el PDF con el prefijo según el botón
-
-        presionado y llama al cargador de PDF.
-        """
         file_path = filedialog.askopenfilename(
             title=f"Seleccionar PDF de {prefijo_tipo.lower()}",
             filetypes=[("Archivos PDF", "*.pdf")],
@@ -370,21 +371,15 @@ class PDFViewerApp:
 
         try:
             folder_path, old_filename = os.path.split(file_path)
-
-            # Asigna el nuevo nombre (Ej: "Extracto_NombreOriginal.pdf")
             nuevo_nombre = f"{prefijo_tipo}_{old_filename}"
             new_file_path = os.path.join(folder_path, nuevo_nombre)
 
-            # Renombra el archivo en el sistema operativo si no tiene ya el prefijo
             if file_path != new_file_path:
                 os.replace(file_path, new_file_path)
                 file_path = new_file_path
 
-            # Guardar la ruta activa y el tipo en la clase para su posterior uso en reorganizar_excel
             self.current_pdf_path = file_path
             self.tipo_documento = prefijo_tipo
-
-            # Llamar a la función de carga pasándole la nueva ruta
             self.load_pdf(file_path)
 
         except Exception as e:
@@ -393,15 +388,15 @@ class PDFViewerApp:
                 f"No se pudo asignar el nombre al archivo:\n{str(e)}",
             )
 
-
     def load_pdf(self, file_path):
-        """Carga y muestra el contenido del PDF en la interfaz gráfica."""
         try:
             total_pages = self.pdf_engine.open_pdf(file_path)
 
+            # Limpiar páginas anteriores
             for child in self.scrollable_frame.winfo_children():
                 child.destroy()
 
+            # Renderizar las páginas en imágenes
             for photo in self.pdf_engine.page_images:
                 lbl_page = ttk.Label(self.scrollable_frame, image=photo)
                 lbl_page.pack(pady=10, padx=20)
@@ -412,15 +407,21 @@ class PDFViewerApp:
                 style="Status.TLabel",
             )
             self.btn_process.config(state=tk.NORMAL, style="Primary.TButton")
-            self.btn_reorganize.config(state=tk.DISABLED, style="Secondary.TButton")
+            self.btn_reorganize.config(
+                state=tk.DISABLED, style="Secondary.TButton"
+            )
             self.btn_open_excel.config(
                 state=tk.DISABLED, style="Secondary.TButton"
             )
+
+            # Cambiar a la vista previa del PDF
+            self.notebook.select(self.tab_pdf)
 
         except Exception as e:
             messagebox.showerror(
                 "Error de Carga", f"No se pudo cargar el PDF:\n{str(e)}"
             )
+
     def process_pdf(self):
         if not self.pdf_engine.has_document:
             messagebox.showwarning("Atención", "Carga un archivo PDF primero.")
@@ -429,109 +430,163 @@ class PDFViewerApp:
         if ejecutar_proceso_exportacion is None:
             messagebox.showerror(
                 "Error de Módulo",
-                f"No se pudo importar 'script.py':\n{_import_error_msg}"
+                f"No se pudo importar 'script.py':\n{_import_error_msg}",
             )
             return
 
-        # Nombre por defecto sugerido
-        nombre_sugerido = os.path.splitext(os.path.basename(self.pdf_engine.current_path))[0] + "_convertido.xlsx"
+        nombre_sugerido = (
+            os.path.splitext(
+                os.path.basename(self.pdf_engine.current_path)
+            )[0]
+            + "_convertido.xlsx"
+        )
 
-        # Ventana modal para solicitar la ruta y el nombre del archivo de salida
         save_path = filedialog.asksaveasfilename(
             title="Guardar archivo Excel como...",
             initialfile=nombre_sugerido,
             defaultextension=".xlsx",
-            filetypes=[("Libro de Excel", "*.xlsx")]
+            filetypes=[("Libro de Excel", "*.xlsx")],
         )
 
-        # Si el usuario cancela la ventana de guardado
         if not save_path:
             return
 
-        # Feedback visual mientras se procesa (no cambia el flujo, solo la UX)
         self.root.config(cursor="watch")
-        self.info_label.config(text="⏳ Procesando PDF, por favor espera...", style="Info.TLabel")
+        self.info_label.config(
+            text="⏳ Procesando PDF, por favor espera...", style="Info.TLabel"
+        )
         self.root.update_idletasks()
 
         try:
-            # Pasa la ruta seleccionada
-            excel_generado = ejecutar_proceso_exportacion(self.pdf_engine.current_path, output_excel_path=save_path)
+            excel_generado = ejecutar_proceso_exportacion(
+                self.pdf_engine.current_path, output_excel_path=save_path
+            )
 
             self.pdf_engine.last_excel_path = excel_generado
 
-            self.btn_reorganize.config(state=tk.NORMAL, style="Primary.TButton")
-            self.btn_open_excel.config(state=tk.NORMAL, style="Secondary.TButton")
+            self.btn_reorganize.config(
+                state=tk.NORMAL, style="Primary.TButton"
+            )
+            self.btn_open_excel.config(
+                state=tk.NORMAL, style="Secondary.TButton"
+            )
 
             self.info_label.config(
-                text=f"✅ Excel generado:\n{os.path.basename(excel_generado)}",
+                text=(
+                    "✅ Excel"
+                    f" generado:\n{os.path.basename(excel_generado)}"
+                ),
                 style="Status.TLabel",
             )
 
+            self.cargar_excel_en_gui(excel_generado)
+
             messagebox.showinfo(
                 "Proceso Exitoso",
-                f"¡Extracción completada!\n\nArchivo guardado en:\n{excel_generado}"
+                "¡Extracción completada!\n\nArchivo guardado"
+                f" en:\n{excel_generado}",
             )
         except Exception as e:
-            self.info_label.config(text="⚠️ Ocurrió un error al procesar el PDF.", style="Info.TLabel")
-            messagebox.showerror("Error al procesar", f"Ocurrió un error en la extracción:\n{str(e)}")
+            self.info_label.config(
+                text="⚠️ Ocurrió un error al procesar el PDF.",
+                style="Info.TLabel",
+            )
+            messagebox.showerror(
+                "Error al procesar",
+                f"Ocurrió un error en la extracción:\n{str(e)}",
+            )
         finally:
             self.root.config(cursor="")
 
     def reorganize_excel_file(self):
         if reorganizar_excel is None:
-            messagebox.showerror("Error de Módulo", "La función 'reorganizar_excel' no está disponible.")
+            messagebox.showerror(
+                "Error de Módulo",
+                "La función 'reorganizar_excel' no está disponible.",
+            )
             return
 
         try:
-            exito = self.pdf_engine.reorganizar_excel_actual(reorganizar_excel)
+            exito = self.pdf_engine.reorganizar_excel_actual(
+                reorganizar_excel
+            )
             if exito:
-                self._cargar_excel_en_treeview(self.pdf_engine.last_excel_path)
+                self.cargar_excel_en_gui(self.pdf_engine.last_excel_path)
                 messagebox.showinfo(
                     "Reorganización Exitosa",
-                    "El archivo Excel se reorganizó correctamente."
+                    "El archivo Excel se reorganizó correctamente.",
                 )
             else:
-                messagebox.showwarning("Atención", "No se encontró el Excel generado para reorganizar.")
+                messagebox.showwarning(
+                    "Atención",
+                    "No se encontró el Excel generado para reorganizar.",
+                )
         except PermissionError:
             messagebox.showerror(
                 "Error de Permiso",
-                "El archivo Excel está abierto en otro programa. Ciérralo e intenta de nuevo."
+                "El archivo Excel está abierto en otro programa. Ciérralo e"
+                " intenta de nuevo.",
             )
         except Exception as e:
-            messagebox.showerror("Error al reorganizar", f"Ocurrió un fallo:\n{str(e)}")
+            messagebox.showerror(
+                "Error al reorganizar", f"Ocurrió un fallo:\n{str(e)}"
+            )
 
-    def _cargar_excel_en_treeview(self, file_path):
-        if not file_path or not os.path.exists(file_path):
+    def cargar_excel_en_gui(self, excel_path):
+        if not excel_path or not os.path.exists(excel_path):
             return
 
         try:
-            # 1. Leer el archivo con pandas
-            df = pd.read_excel(file_path)
-            df = df.fillna("")  # Reemplazar valores vacíos para evitar errores visuales
+            for tab in self.notebook_hojas.tabs():
+                self.notebook_hojas.forget(tab)
 
-            # 2. Limpiar filas antiguas que existan en la tabla
-            for item in self.tree_excel.get_children():
-                self.tree_excel.delete(item)
+            excel_file = pd.ExcelFile(excel_path)
 
-            # 3. Ajustar las columnas si el Excel trae columnas dinámicas
-            cols = list(df.columns)
-            self.tree_excel["columns"] = cols
-            self.tree_excel["show"] = "headings"
+            for sheet_name in excel_file.sheet_names:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name)
 
-            for col in cols:
-                self.tree_excel.heading(col, text=col)
-                self.tree_excel.column(col, width=110, anchor="center")
+                tab_frame = ttk.Frame(self.notebook_hojas)
+                self.notebook_hojas.add(tab_frame, text=f" 📄 {sheet_name} ")
 
-            # 4. Insertar los datos (con filas alternadas para mejor lectura)
-            for i, (_, row) in enumerate(df.iterrows()):
-                tag = "odd" if i % 2 else "even"
-                self.tree_excel.insert("", tk.END, values=list(row), tags=(tag,))
+                scroll_y = ttk.Scrollbar(tab_frame, orient=tk.VERTICAL)
+                scroll_x = ttk.Scrollbar(tab_frame, orient=tk.HORIZONTAL)
 
-            # 5. Enfocar/Seleccionar la pestaña de Excel automáticamente
+                cols = list(df.columns)
+                tree = ttk.Treeview(
+                    tab_frame,
+                    columns=cols,
+                    show="headings",
+                    yscrollcommand=scroll_y.set,
+                    xscrollcommand=scroll_x.set,
+                )
+
+                scroll_y.config(command=tree.yview)
+                scroll_x.config(command=tree.xview)
+
+                scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+                scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+                tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+                for col in cols:
+                    tree.heading(col, text=col)
+                    tree.column(
+                        col,
+                        width=max(120, len(str(col)) * 12),
+                        anchor="center",
+                    )
+
+                for _, row in df.iterrows():
+                    valores_fila = [
+                        "" if pd.isna(val) else str(val) for val in row.values
+                    ]
+                    tree.insert("", tk.END, values=valores_fila)
+
             self.notebook.select(self.tab_excel)
 
         except Exception as e:
-            messagebox.showwarning("Aviso", f"No se pudo cargar la vista previa del Excel:\n{e}")
+            messagebox.showwarning(
+                "Aviso", f"No se pudo cargar la vista previa del Excel:\n{e}"
+            )
 
     def open_excel(self):
         if not self.pdf_engine.open_generated_excel():
@@ -550,7 +605,7 @@ if __name__ == "__main__":
         icono = tk.PhotoImage(file=icon_path)
         root.iconphoto(True, icono)
     except tk.TclError:
-        pass  # Si el ícono no existe o no es válido, se continúa sin él
+        pass
 
     app = PDFViewerApp(root)
     root.mainloop()
