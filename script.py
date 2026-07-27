@@ -3,6 +3,8 @@ import re
 import pandas as pd
 import pdfplumber
 import sys
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 DELIMITADOR = "|||"
 
@@ -296,18 +298,126 @@ def reorganizar_excel(excel_path):
         }
     )
 
-    # 4. Agrupar por Conceptos
-    df_conceptos = (
-        df_ordenado.groupby(col_desc, as_index=False)["VALOR"]
-        .sum()
-        .rename(columns={"VALOR": "VALOR_TOTAL"})
+   # ==============================================================================
+    # 4. Agrupar por Conceptos (Separando Cargos y Abonos)
+    # ==============================================================================
+
+    # Crear columnas auxiliares para separar montos según su signo
+    df_ordenado["CARGOS_TEMP"] = df_ordenado["VALOR"].apply(
+        lambda x: x if x < 0 else 0
+    )
+    df_ordenado["ABONOS_TEMP"] = df_ordenado["VALOR"].apply(
+        lambda x: x if x > 0 else 0
     )
 
-    # 5. Exportación multi-hoja
+    # Agrupar sumando por separado cada tipo de movimiento
+    df_conceptos = (
+        df_ordenado.groupby(col_desc, as_index=False)
+        .agg(
+            CARGOS=("CARGOS_TEMP", "sum"),
+            ABONOS=("ABONOS_TEMP", "sum"),
+            NETO=("VALOR", "sum"),
+        )
+        .sort_values(by="CARGOS", ascending=True)  # Ordena mostrando mayor gasto arriba
+    )
+
+    # Limpiar columnas auxiliares creadas en el DataFrame principal
+    df_ordenado.drop(columns=["CARGOS_TEMP", "ABONOS_TEMP"], inplace=True)
+
+    # ==============================================================================
+    # 5. Exportación multi-hoja con Formato de Moneda y Fila de TOTALES
+    # ==============================================================================
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
         df_ordenado.to_excel(writer, sheet_name="Datos", index=False)
         df_conciliacion.to_excel(writer, sheet_name="Resumen", index=False)
         df_conceptos.to_excel(writer, sheet_name="Conceptos", index=False)
+
+        workbook = writer.book
+
+        # Formato de moneda contable ($)
+        FORMATO_MONEDA = '"$"#,##0.00;[Red]("$"#,##0.00);"-"'
+
+        # Estilos contables para la fila de TOTAL
+        font_bold = Font(bold=True)
+        fill_total = PatternFill(
+            start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"
+        )
+        border_top_thin = Side(border_style="thin", color="000000")
+        border_bottom_double = Side(border_style="double", color="000000")
+        border_total = Border(top=border_top_thin, bottom=border_bottom_double)
+
+        # --------------------------------------------------------------------------
+        # A. Aplicar formato numérico a todas las hojas
+        # --------------------------------------------------------------------------
+        for sheet_name in workbook.sheetnames:
+            worksheet = workbook[sheet_name]
+
+            for col in worksheet.iter_cols(1, worksheet.max_column):
+                header_val = str(col[0].value).upper() if col[0].value else ""
+
+                if header_val in [
+                    "VALOR",
+                    "SALDO",
+                    "CARGOS",
+                    "ABONOS",
+                    "NETO",
+                    "VALOR_TOTAL",
+                ]:
+                    for cell in col[1:]:
+                        if cell.value is not None and isinstance(
+                            cell.value, (int, float)
+                        ):
+                            cell.number_format = FORMATO_MONEDA
+
+        # --------------------------------------------------------------------------
+        # B. Agregar fila de TOTAL en la hoja 'Conceptos'
+        # --------------------------------------------------------------------------
+        if "Conceptos" in workbook.sheetnames:
+            ws_conceptos = workbook["Conceptos"]
+            max_row = ws_conceptos.max_row
+            total_row = max_row + 1
+
+            # Mapear encabezados para ubicar las columnas dinámicamente
+            headers = [
+                str(cell.value).upper() if cell.value else ""
+                for cell in ws_conceptos[1]
+            ]
+
+            # Obtener los índices de las columnas
+            col_desc_idx = (
+                headers.index("DESCRIPCION") + 1 if "DESCRIPCION" in headers else 1
+            )
+            col_cargos_idx = (
+                headers.index("CARGOS") + 1 if "CARGOS" in headers else None
+            )
+            col_abonos_idx = (
+                headers.index("ABONOS") + 1 if "ABONOS" in headers else None
+            )
+            col_neto_idx = (
+                headers.index("NETO") + 1 if "NETO" in headers else None
+            )
+
+            # 1. Escribir la etiqueta "TOTAL"
+            cell_label = ws_conceptos.cell(
+                row=total_row, column=col_desc_idx, value="TOTAL"
+            )
+            cell_label.font = font_bold
+            cell_label.alignment = Alignment(horizontal="left")
+
+            # 2. Insertar fórmulas =SUM(...) para CARGOS, ABONOS y NETO
+            for col_idx in [col_cargos_idx, col_abonos_idx, col_neto_idx]:
+                if col_idx:
+                    col_letter = get_column_letter(col_idx)
+                    # Fórmula de Excel para sumar desde el primer dato hasta el último
+                    formula = f"=SUM({col_letter}2:{col_letter}{max_row})"
+
+                    cell_total = ws_conceptos.cell(
+                        row=total_row, column=col_idx, value=formula
+                    )
+                    cell_total.font = font_bold
+                    cell_total.number_format = FORMATO_MONEDA
+                    cell_total.fill = fill_total
+                    cell_total.border = border_total
 
     return excel_path
 
