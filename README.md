@@ -1,4 +1,4 @@
-# Extractor de Extractos Bancarios (Bancolombia)
+# Extractor de excel para informacion bancaria
 
 Este proyecto nace con la finalidad de automatizar y optimizar la extracción de transacciones desde extractos bancarios en formato PDF, convirtiéndolos en formatos estructurados como Excel (`.xlsx`) y texto plano delimitado (`.txt`). En esta primera versión, la herramienta está personalizada y optimizada específicamente para los extractos de **Bancolombia**.
 
