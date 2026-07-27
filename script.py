@@ -191,6 +191,14 @@ def reorganizar_excel(excel_path):
         .str.strip(),
         errors="coerce",
     )
+    df_ordenado["SALDO"]=pd.to_numeric(
+        df_ordenado["SALDO"]
+        .astype(str)    
+        .str.replace(",", "", regex=False)
+        .str.replace("$", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    )
 
     # 3. Crear DataFrame de conciliación (Resumen)
     df_conciliacion = pd.DataFrame(
