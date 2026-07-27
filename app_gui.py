@@ -222,17 +222,27 @@ class PDFViewerApp:
         subtitle_label.pack(anchor="w", pady=(0, 18))
 
         ttk.Separator(left_frame, orient="horizontal").pack(fill=tk.X, pady=(0, 18))
-        
+
         self._build_warning_box(left_frame)
 
         btn_load = ttk.Button(
             left_frame,
-            text="📁  Cargar PDF de extractos",
-            command=self.load_pdf,
+            text="📄 Cargar PDF de extractos",
+            command=lambda: self.cargar_y_procesar_pdf("Extracto"),
             style="Primary.TButton",
             cursor="hand2",
         )
         btn_load.pack(fill=tk.X, pady=6)
+
+        btn_load_movimientos = ttk.Button(
+            left_frame,
+            text="📄 Cargar PDF de movimientos",
+            command=lambda: self.cargar_y_procesar_pdf("Movimientos"),
+            style="Primary.TButton",
+            cursor="hand2",
+        )
+        btn_load_movimientos.pack(fill=tk.X, pady=6)
+        
 
         self.btn_process = ttk.Button(
             left_frame,
@@ -345,15 +355,47 @@ class PDFViewerApp:
     # ------------------------------------------------------------------
     # Lógica de la aplicación (sin cambios funcionales)
     # ------------------------------------------------------------------
-    def load_pdf(self):
+    def cargar_y_procesar_pdf(self, prefijo_tipo):
+        """Abre el diálogo de archivos, renombra el PDF con el prefijo según el botón
+
+        presionado y llama al cargador de PDF.
+        """
         file_path = filedialog.askopenfilename(
-            title="Seleccionar extracto PDF",
-            filetypes=[("Archivos PDF", "*.pdf")]
+            title=f"Seleccionar PDF de {prefijo_tipo.lower()}",
+            filetypes=[("Archivos PDF", "*.pdf")],
         )
 
         if not file_path:
             return
 
+        try:
+            folder_path, old_filename = os.path.split(file_path)
+
+            # Asigna el nuevo nombre (Ej: "Extracto_NombreOriginal.pdf")
+            nuevo_nombre = f"{prefijo_tipo}_{old_filename}"
+            new_file_path = os.path.join(folder_path, nuevo_nombre)
+
+            # Renombra el archivo en el sistema operativo si no tiene ya el prefijo
+            if file_path != new_file_path:
+                os.replace(file_path, new_file_path)
+                file_path = new_file_path
+
+            # Guardar la ruta activa y el tipo en la clase para su posterior uso en reorganizar_excel
+            self.current_pdf_path = file_path
+            self.tipo_documento = prefijo_tipo
+
+            # Llamar a la función de carga pasándole la nueva ruta
+            self.load_pdf(file_path)
+
+        except Exception as e:
+            messagebox.showerror(
+                "Error al renombrar",
+                f"No se pudo asignar el nombre al archivo:\n{str(e)}",
+            )
+
+
+    def load_pdf(self, file_path):
+        """Carga y muestra el contenido del PDF en la interfaz gráfica."""
         try:
             total_pages = self.pdf_engine.open_pdf(file_path)
 
@@ -371,11 +413,14 @@ class PDFViewerApp:
             )
             self.btn_process.config(state=tk.NORMAL, style="Primary.TButton")
             self.btn_reorganize.config(state=tk.DISABLED, style="Secondary.TButton")
-            self.btn_open_excel.config(state=tk.DISABLED, style="Secondary.TButton")
+            self.btn_open_excel.config(
+                state=tk.DISABLED, style="Secondary.TButton"
+            )
 
         except Exception as e:
-            messagebox.showerror("Error de Carga", f"No se pudo cargar el PDF:\n{str(e)}")
-
+            messagebox.showerror(
+                "Error de Carga", f"No se pudo cargar el PDF:\n{str(e)}"
+            )
     def process_pdf(self):
         if not self.pdf_engine.has_document:
             messagebox.showwarning("Atención", "Carga un archivo PDF primero.")

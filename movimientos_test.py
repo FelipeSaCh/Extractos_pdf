@@ -11,7 +11,7 @@ def es_numero_financiero(texto):
     if not texto:
         return False
     txt = texto.strip().replace("$", "").replace(" ", "")
-    patron = r"^[-+]?[\d\.,]+$"
+    patron = r"^-?[\d\.,]+$"
     return bool(re.match(patron, txt))
 
 
