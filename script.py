@@ -26,6 +26,41 @@ def es_numero_financiero(texto):
     return bool(re.match(patron, txt))
 
 
+_PATRON_PAG_TOKEN = re.compile(r"(?i)^p[áa]g(?:ina)?\.?$")
+_PATRON_DE_TOKEN = re.compile(r"(?i)^de\.?$")
+_PATRON_NUM_TOKEN = re.compile(r"^\d+$")
+
+
+def limpiar_pie_pagina(words_fila):
+    """Elimina, token por token en orden X, la secuencia 'Página N de M' (o variantes:
+    'Pág. N de M', 'Página N', 'de M') sin importar si comparte fila con datos reales,
+    ya que pdfplumber puede fusionar el pie de página con la última fila de la tabla.
+    """
+    n = len(words_fila)
+    idx_a_quitar = set()
+    i = 0
+    while i < n:
+        if _PATRON_PAG_TOKEN.match(words_fila[i]["text"].strip()):
+            seq = [i]
+            j = i + 1
+            if j < n and _PATRON_NUM_TOKEN.match(words_fila[j]["text"].strip()):
+                seq.append(j)
+                j += 1
+                if j < n and _PATRON_DE_TOKEN.match(words_fila[j]["text"].strip()):
+                    seq.append(j)
+                    j += 1
+                    if j < n and _PATRON_NUM_TOKEN.match(words_fila[j]["text"].strip()):
+                        seq.append(j)
+                        j += 1
+            idx_a_quitar.update(seq)
+            i = j
+        else:
+            i += 1
+    if not idx_a_quitar:
+        return words_fila
+    return [w for k, w in enumerate(words_fila) if k not in idx_a_quitar]
+
+
 def texto_delimitado_a_excel(lineas_texto, columnas, output_excel_path):
     """Convierte las líneas delimitadas a un DataFrame y lo exporta a Excel."""
     registros = []
@@ -36,14 +71,12 @@ def texto_delimitado_a_excel(lineas_texto, columnas, output_excel_path):
 
     df = pd.DataFrame(registros, columns=columnas)
     df.to_excel(output_excel_path, index=False)
-
-
 # ==============================================================================
 # PARSER 1: MOVIMIENTOS
 # ==============================================================================
 
 def extraer_lineas_movimientos(pdf_path):
-    """Extrae las transacciones para archivos de tipo 'Movimientos'."""
+    """Extrae transacciones filtrando el pie de página ('Página X de Y') sin borrar la descripción que comparte línea."""
     patron_fecha = r"^\b(?:\d{4}/\d{2}/\d{2}|\d{1,2}/\d{2}(?:/\d{2,4})?)\b"
     lineas_delimitadas = []
 
@@ -58,7 +91,7 @@ def extraer_lineas_movimientos(pdf_path):
             x_max_sucursal = anc_pagina * 0.50
             x_max_ref1 = anc_pagina * 0.63
             x_max_ref2 = anc_pagina * 0.73
-            x_max_doc = anc_pagina * 0.85  # Todo lo que esté a la derecha de 0.85 es la columna VALOR
+            x_max_doc = anc_pagina * 0.85
 
             filas_y = {}
             for w in words:
@@ -69,7 +102,12 @@ def extraer_lineas_movimientos(pdf_path):
             tx_actual = None
 
             for y_key in sorted(filas_y.keys()):
-                words_linea = sorted(filas_y[y_key], key=lambda x: x["x0"])
+                words_brutas = sorted(filas_y[y_key], key=lambda x: x["x0"])
+
+                # Elimina la secuencia "Página N de M" sin importar si quedó
+                # pegada a la última transacción de la página.
+                words_linea = limpiar_pie_pagina(words_brutas)
+
                 if not words_linea:
                     continue
 
@@ -100,7 +138,7 @@ def extraer_lineas_movimientos(pdf_path):
                         continue
                     words_a_procesar = words_linea
 
-                # Asignación estricta por coordenadas X
+                # Asignar las palabras válidas a sus respectivas columnas por coordenadas X
                 for w in words_a_procesar:
                     x_centro = (w["x0"] + w["x1"]) / 2.0
                     txt_w = w["text"]
@@ -116,8 +154,10 @@ def extraer_lineas_movimientos(pdf_path):
                     elif x_centro < x_max_doc:
                         tx_actual["DOCUMENTO"].append(txt_w)
                     else:
-                        # Columna final: VALOR
-                        tx_actual["VALOR"] = txt_w
+                        # Solo se acepta como VALOR si realmente es numérico;
+                        # evita que un residuo de pie de página sobreescriba el valor real.
+                        if es_numero_financiero(txt_w):
+                            tx_actual["VALOR"] = txt_w
 
             if tx_actual:
                 transacciones_pagina.append(tx_actual)
@@ -174,7 +214,11 @@ def extraer_lineas_extractos(pdf_path):
                 filas_y.setdefault(y_key, []).append(w)
 
             for y_key in sorted(filas_y.keys()):
-                words_linea = sorted(filas_y[y_key], key=lambda x: x["x0"])
+                words_ordenadas = sorted(filas_y[y_key], key=lambda x: x["x0"])
+
+                # Elimina la secuencia "Página N de M" aunque quede pegada a la fila.
+                words_linea = limpiar_pie_pagina(words_ordenadas)
+
                 if not words_linea:
                     continue
 
@@ -298,7 +342,7 @@ def reorganizar_excel(excel_path):
         }
     )
 
-   # ==============================================================================
+    # ==============================================================================
     # 4. Agrupar por Conceptos (Separando Cargos y Abonos)
     # ==============================================================================
 
@@ -324,37 +368,28 @@ def reorganizar_excel(excel_path):
     # Limpiar columnas auxiliares creadas en el DataFrame principal
     df_ordenado.drop(columns=["CARGOS_TEMP", "ABONOS_TEMP"], inplace=True)
 
-    # ==============================================================================
-    # 5. Exportación multi-hoja con Formato de Moneda y Fila de TOTALES
-    # ==============================================================================
+    # 5. Exportación multi-hoja
+
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
         df_ordenado.to_excel(writer, sheet_name="Datos", index=False)
         df_conciliacion.to_excel(writer, sheet_name="Resumen", index=False)
         df_conceptos.to_excel(writer, sheet_name="Conceptos", index=False)
 
+        # Obtener el libro para aplicar formatos de celda
         workbook = writer.book
 
-        # Formato de moneda contable ($)
+        # Formato contable/financiero con signo $ y separadores de miles
         FORMATO_MONEDA = '"$"#,##0.00;[Red]("$"#,##0.00);"-"'
 
-        # Estilos contables para la fila de TOTAL
-        font_bold = Font(bold=True)
-        fill_total = PatternFill(
-            start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"
-        )
-        border_top_thin = Side(border_style="thin", color="000000")
-        border_bottom_double = Side(border_style="double", color="000000")
-        border_total = Border(top=border_top_thin, bottom=border_bottom_double)
-
-        # --------------------------------------------------------------------------
-        # A. Aplicar formato numérico a todas las hojas
-        # --------------------------------------------------------------------------
+        # Aplicar formato a las columnas numéricas en cada hoja
         for sheet_name in workbook.sheetnames:
             worksheet = workbook[sheet_name]
 
+            # Recorrer los encabezados (fila 1) para encontrar columnas de montos
             for col in worksheet.iter_cols(1, worksheet.max_column):
                 header_val = str(col[0].value).upper() if col[0].value else ""
 
+                # Identificar si la columna contiene valores monetarios
                 if header_val in [
                     "VALOR",
                     "SALDO",
@@ -363,61 +398,12 @@ def reorganizar_excel(excel_path):
                     "NETO",
                     "VALOR_TOTAL",
                 ]:
+                    # Aplicar el formato a cada celda de la columna (omitiendo el encabezado)
                     for cell in col[1:]:
                         if cell.value is not None and isinstance(
                             cell.value, (int, float)
                         ):
                             cell.number_format = FORMATO_MONEDA
-
-        # --------------------------------------------------------------------------
-        # B. Agregar fila de TOTAL en la hoja 'Conceptos'
-        # --------------------------------------------------------------------------
-        if "Conceptos" in workbook.sheetnames:
-            ws_conceptos = workbook["Conceptos"]
-            max_row = ws_conceptos.max_row
-            total_row = max_row + 1
-
-            # Mapear encabezados para ubicar las columnas dinámicamente
-            headers = [
-                str(cell.value).upper() if cell.value else ""
-                for cell in ws_conceptos[1]
-            ]
-
-            # Obtener los índices de las columnas
-            col_desc_idx = (
-                headers.index("DESCRIPCION") + 1 if "DESCRIPCION" in headers else 1
-            )
-            col_cargos_idx = (
-                headers.index("CARGOS") + 1 if "CARGOS" in headers else None
-            )
-            col_abonos_idx = (
-                headers.index("ABONOS") + 1 if "ABONOS" in headers else None
-            )
-            col_neto_idx = (
-                headers.index("NETO") + 1 if "NETO" in headers else None
-            )
-
-            # 1. Escribir la etiqueta "TOTAL"
-            cell_label = ws_conceptos.cell(
-                row=total_row, column=col_desc_idx, value="TOTAL"
-            )
-            cell_label.font = font_bold
-            cell_label.alignment = Alignment(horizontal="left")
-
-            # 2. Insertar fórmulas =SUM(...) para CARGOS, ABONOS y NETO
-            for col_idx in [col_cargos_idx, col_abonos_idx, col_neto_idx]:
-                if col_idx:
-                    col_letter = get_column_letter(col_idx)
-                    # Fórmula de Excel para sumar desde el primer dato hasta el último
-                    formula = f"=SUM({col_letter}2:{col_letter}{max_row})"
-
-                    cell_total = ws_conceptos.cell(
-                        row=total_row, column=col_idx, value=formula
-                    )
-                    cell_total.font = font_bold
-                    cell_total.number_format = FORMATO_MONEDA
-                    cell_total.fill = fill_total
-                    cell_total.border = border_total
 
     return excel_path
 
@@ -461,7 +447,7 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
         )
 
     if not lineas_plana:
-        
+
         return None
 
     # Definir rutas de salida
@@ -484,7 +470,5 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
 
     # 3. Reorganizar y crear pestañas suplementarias
     reorganizar_excel(output_excel_path)
-
-
 
     return output_excel_path

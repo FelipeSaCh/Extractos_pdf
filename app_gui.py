@@ -245,14 +245,14 @@ class PDFViewerApp:
         )
         btn_load.pack(fill=tk.X, pady=6)
 
-        """btn_load_movimientos = ttk.Button(
+        btn_load_movimientos = ttk.Button(
             left_frame,
             text="📄 Cargar PDF de movimientos",
             command=lambda: self.cargar_y_procesar_pdf("Movimientos"),
             style="Primary.TButton",
             cursor="hand2",
-        ) SE COMENTA MOMENTANEO PARA CORRECCIONES DE ERRORES
-        btn_load_movimientos.pack(fill=tk.X, pady=6)"""
+        ) 
+        btn_load_movimientos.pack(fill=tk.X, pady=6)
 
         self.btn_process = ttk.Button(
             left_frame,
