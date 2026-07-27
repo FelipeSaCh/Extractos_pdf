@@ -2,12 +2,18 @@ import os
 import re
 import pandas as pd
 import pdfplumber
+import sys
 
 DELIMITADOR = "|||"
 
 # ==============================================================================
 # FUNCIONES AUXILIARES COMUNES
 # ==============================================================================
+def obtener_ruta_asset(ruta_relativa):
+    """ Obtiene la ruta absoluta para assets, funciona en desarrollo y en el .exe de PyInstaller """
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, ruta_relativa)
+    return os.path.join(os.path.abspath("."), ruta_relativa)
 
 def es_numero_financiero(texto):
     """Valida si un texto es un monto monetario (positivo, negativo o decimales)."""
@@ -345,7 +351,7 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
         )
 
     if not lineas_plana:
-        print(f"⚠ ATENCIÓN: No se encontraron registros para {tipo}.")
+        
         return None
 
     # Definir rutas de salida
@@ -369,8 +375,6 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
     # 3. Reorganizar y crear pestañas suplementarias
     reorganizar_excel(output_excel_path)
 
-    print(f"✓ Éxito [{tipo}]: Procesadas {len(lineas_plana)} transacciones.")
-    print(f"✓ Archivo Plano: {txt_path}")
-    print(f"✓ Archivo Excel: {output_excel_path}")
+
 
     return output_excel_path
