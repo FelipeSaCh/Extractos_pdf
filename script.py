@@ -342,8 +342,8 @@ def reorganizar_excel(excel_path):
         }
     )
 
-    # ==============================================================================
-    # 4. Agrupar por Conceptos (Separando Cargos y Abonos)
+# ==============================================================================
+    # 4. Agrupar por Conceptos (Separando Cargos y Abonos + Fila de TOTAL)
     # ==============================================================================
 
     # Crear columnas auxiliares para separar montos según su signo
@@ -362,12 +362,27 @@ def reorganizar_excel(excel_path):
             ABONOS=("ABONOS_TEMP", "sum"),
             NETO=("VALOR", "sum"),
         )
-        .sort_values(by="CARGOS", ascending=True)  # Ordena mostrando mayor gasto arriba
+        .sort_values(
+            by="CARGOS", ascending=True
+        )  # Ordena mostrando mayor gasto arriba
     )
+
+    # --- AGREGAR FILA DE TOTAL GENERAL AL FINAL ---
+    fila_total = pd.DataFrame(
+        [
+            {
+                col_desc: "TOTAL GENERAL",
+                "CARGOS": df_conceptos["CARGOS"].sum(),
+                "ABONOS": df_conceptos["ABONOS"].sum(),
+                "NETO": df_conceptos["NETO"].sum(),
+            }
+        ]
+    )
+
+    df_conceptos = pd.concat([df_conceptos, fila_total], ignore_index=True)
 
     # Limpiar columnas auxiliares creadas en el DataFrame principal
     df_ordenado.drop(columns=["CARGOS_TEMP", "ABONOS_TEMP"], inplace=True)
-
     # 5. Exportación multi-hoja
 
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
