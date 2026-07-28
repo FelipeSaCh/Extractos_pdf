@@ -11,6 +11,7 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Nuevo modulo de movimientos
 - Ventana de multi hojas para lectura de excel procesados despues de su conversion
 - Se pone "Movimimientos en mantenimiento para correccion de bugs"
+- Se añade saldo anterior y saldo actual a la hoja de resumen
 
 ### Modificado
 -Se modifican formatos
