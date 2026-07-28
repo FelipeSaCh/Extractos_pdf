@@ -397,9 +397,7 @@ class PDFViewerApp:
                 style="Status.TLabel",
             )
             self.btn_process.config(state=tk.NORMAL, style="Primary.TButton")
-            self.btn_reorganize.config(
-                state=tk.DISABLED, style="Secondary.TButton"
-            )
+           
             self.btn_open_excel.config(
                 state=tk.DISABLED, style="Secondary.TButton"
             )
@@ -454,9 +452,7 @@ class PDFViewerApp:
 
             self.pdf_engine.last_excel_path = excel_generado
 
-            self.btn_reorganize.config(
-                state=tk.NORMAL, style="Primary.TButton"
-            )
+            
             self.btn_open_excel.config(
                 state=tk.NORMAL, style="Secondary.TButton"
             )
