@@ -8,6 +8,16 @@ class PDFEngine:
         self.current_path = None
         self.last_excel_path = None
         self.page_images = []
+        self.last_pdf_path = None
+        self.last_excel_path = None
+
+    def liberar_recursos(self):
+        """Reset de variables para que el motor olvide los archivos cargados."""
+        self.last_excel_path = None
+        self.last_pdf_path=None
+
+        if hasattr(self, 'df_original_raw'):
+            self.df_original_raw = None
 
     def open_pdf(self, path: str, zoom: float = 1.5):
         """Abre el PDF y prepara las imágenes para Tkinter."""
