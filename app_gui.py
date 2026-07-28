@@ -264,16 +264,6 @@ class PDFViewerApp:
         )
         self.btn_process.pack(fill=tk.X, pady=6)
 
-        self.btn_reorganize = ttk.Button(
-            left_frame,
-            text="🔄  Reorganizar Excel",
-            command=self.reorganize_excel_file,
-            state=tk.DISABLED,
-            style="Secondary.TButton",
-            cursor="hand2",
-        )
-        self.btn_reorganize.pack(fill=tk.X, pady=6)
-
         self.btn_open_excel = ttk.Button(
             left_frame,
             text="🟢  Abrir Excel",
@@ -498,39 +488,7 @@ class PDFViewerApp:
         finally:
             self.root.config(cursor="")
 
-    def reorganize_excel_file(self):
-        if reorganizar_excel is None:
-            messagebox.showerror(
-                "Error de Módulo",
-                "La función 'reorganizar_excel' no está disponible.",
-            )
-            return
-
-        try:
-            exito = self.pdf_engine.reorganizar_excel_actual(
-                reorganizar_excel
-            )
-            if exito:
-                self.cargar_excel_en_gui(self.pdf_engine.last_excel_path)
-                messagebox.showinfo(
-                    "Reorganización Exitosa",
-                    "El archivo Excel se reorganizó correctamente.",
-                )
-            else:
-                messagebox.showwarning(
-                    "Atención",
-                    "No se encontró el Excel generado para reorganizar.",
-                )
-        except PermissionError:
-            messagebox.showerror(
-                "Error de Permiso",
-                "El archivo Excel está abierto en otro programa. Ciérralo e"
-                " intenta de nuevo.",
-            )
-        except Exception as e:
-            messagebox.showerror(
-                "Error al reorganizar", f"Ocurrió un fallo:\n{str(e)}"
-            )
+   
 
     def cargar_excel_en_gui(self, excel_path):
         if not excel_path or not os.path.exists(excel_path):

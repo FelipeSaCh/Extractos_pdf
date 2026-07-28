@@ -289,14 +289,19 @@ def extraer_lineas_extractos(pdf_path):
 # ==============================================================================
 
 def reorganizar_excel(excel_path):
-    """Limpia tipos de datos, calcula saldos, ordena negativos arriba y genera
+    """1.
 
-    las hojas 'Datos', 'Resumen' y 'Conceptos'.
+    Calcula saldos, conciliación y conceptos sobre el DataFrame ORIGINAL sin alterar.
+    2. Al final, reordena las filas de la hoja 'Datos' (negativos arriba) para visualización.
+    3. Exporta a Excel con formato contable de OpenPyXL.
     """
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"No se encontró el archivo: {excel_path}")
 
-    df = pd.read_excel(excel_path, dtype=str)
+    # Cargar el DataFrame en su estado ORIGINAL (si el archivo ya tenía pestañas, lee la primera)
+    xl = pd.ExcelFile(excel_path)
+    sheet_a_leer = "Datos" if "Datos" in xl.sheet_names else 0
+    df = pd.read_excel(excel_path, sheet_name=sheet_a_leer, dtype=str)
 
     if "VALOR" not in df.columns or df.empty:
         return excel_path
@@ -304,76 +309,42 @@ def reorganizar_excel(excel_path):
     col_desc = "DESCRIPCIÓN" if "DESCRIPCIÓN" in df.columns else "DESCRIPCION"
 
     # ==============================================================================
-    # 1. Obtener Saldo Anterior y Saldo Actual desde el DataFrame ORIGINAL (df)
+    # PASO 1: LIMPIEZA DE NÚMEROS EN EL DF ORIGINAL (SIN CAMBIAR EL ORDEN DE FILAS)
     # ==============================================================================
-    saldo_anterior = 0.0
-    saldo_actual = 0.0
-
-    if "SALDO" in df.columns and "VALOR" in df.columns and not df.empty:
-
-        def _a_flotante(val):
-            if pd.isna(val):
-                return 0.0
-            txt = (
-                str(val)
-                .replace(",", "")
-                .replace("$", "")
-                .replace(" ", "")
-                .strip()
-            )
-            try:
-                return float(txt)
-            except ValueError:
-                return 0.0
-
-        # Primer registro (Fila 0) para el saldo anterior: Saldo - Valor
-        primer_saldo = _a_flotante(df["SALDO"].iloc[0])
-        primer_valor = _a_flotante(df["VALOR"].iloc[0])
-        saldo_anterior = primer_saldo - primer_valor
-
-        # Último registro para el saldo actual
-        saldo_actual = _a_flotante(df["SALDO"].iloc[-1])
-
-    # ==============================================================================
-    # 2. Identificar negativos y ordenar (df_ordenado)
-    # ==============================================================================
-    is_negative = (
-        df["VALOR"].astype(str).str.strip().str.contains("-", na=False)
-    )
-    df["_orden_temp"] = 0
-    df.loc[~is_negative, "_orden_temp"] = 1
-
-    df_ordenado = df.sort_values(by="_orden_temp", kind="stable").drop(
-        columns=["_orden_temp"]
-    )
-
-    # ==============================================================================
-    # 3. Formatear números
-    # ==============================================================================
-    df_ordenado["VALOR"] = pd.to_numeric(
-        df_ordenado["VALOR"]
+    valores_numericos = pd.to_numeric(
+        df["VALOR"]
         .astype(str)
         .str.replace(",", "", regex=False)
         .str.replace("$", "", regex=False)
         .str.strip(),
         errors="coerce",
-    )
+    ).fillna(0.0)
 
-    if "SALDO" in df_ordenado.columns:
-        df_ordenado["SALDO"] = pd.to_numeric(
-            df_ordenado["SALDO"]
+    saldos_numericos = pd.Series(dtype=float)
+    if "SALDO" in df.columns:
+        saldos_numericos = pd.to_numeric(
+            df["SALDO"]
             .astype(str)
             .str.replace(",", "", regex=False)
             .str.replace("$", "", regex=False)
             .str.strip(),
             errors="coerce",
-        )
+        ).fillna(0.0)
 
     # ==============================================================================
-    # 4. Conciliación (Resumen vertical con Saldos arriba/abajo)
+    # PASO 2: CÁLCULOS SOBRE EL DF ORIGINAL (Saldos, Conciliación y Conceptos)
     # ==============================================================================
-    cargos_sum = df_ordenado.loc[df_ordenado["VALOR"] < 0, "VALOR"].sum()
-    abonos_sum = df_ordenado.loc[df_ordenado["VALOR"] > 0, "VALOR"].sum()
+    # A. Saldos exactos desde la Fila 0 y la última fila del DF Original
+    saldo_anterior = 0.0
+    saldo_actual = 0.0
+
+    if not saldos_numericos.empty and not valores_numericos.empty:
+        saldo_anterior = saldos_numericos.iloc[0] - valores_numericos.iloc[0]
+        saldo_actual = saldos_numericos.iloc[-1]
+
+    # B. Totales globales de Cargos y Abonos
+    cargos_sum = valores_numericos[valores_numericos < 0].sum()
+    abonos_sum = valores_numericos[valores_numericos > 0].sum()
 
     df_conciliacion = pd.DataFrame(
         [
@@ -384,33 +355,63 @@ def reorganizar_excel(excel_path):
         ]
     )
 
-    # ==============================================================================
-    # 5. Agrupar por Conceptos (Separando Cargos y Abonos)
-    # ==============================================================================
-    df_ordenado["CARGOS_TEMP"] = df_ordenado["VALOR"].apply(
+    # C. Agrupar por Conceptos (usando los valores numéricos calculados del DF original)
+    df_calc = df.copy()
+    df_calc["_VALOR_NUM"] = valores_numericos
+    df_calc["_CARGOS_TEMP"] = df_calc["_VALOR_NUM"].apply(
         lambda x: x if x < 0 else 0
     )
-    df_ordenado["ABONOS_TEMP"] = df_ordenado["VALOR"].apply(
+    df_calc["_ABONOS_TEMP"] = df_calc["_VALOR_NUM"].apply(
         lambda x: x if x > 0 else 0
     )
 
     df_conceptos = (
-        df_ordenado.groupby(col_desc, as_index=False)
+        df_calc.groupby(col_desc, as_index=False)
         .agg(
-            CARGOS=("CARGOS_TEMP", "sum"),
-            ABONOS=("ABONOS_TEMP", "sum"),
-            NETO=("VALOR", "sum"),
+            CARGOS=("_CARGOS_TEMP", "sum"),
+            ABONOS=("_ABONOS_TEMP", "sum"),
+            NETO=("_VALOR_NUM", "sum"),
         )
         .sort_values(by="CARGOS", ascending=True)
     )
 
-    df_ordenado.drop(columns=["CARGOS_TEMP", "ABONOS_TEMP"], inplace=True)
+    fila_total = pd.DataFrame(
+        [
+            {
+                col_desc: "TOTAL GENERAL",
+                "CARGOS": df_conceptos["CARGOS"].sum(),
+                "ABONOS": df_conceptos["ABONOS"].sum(),
+                "NETO": df_conceptos["NETO"].sum(),
+            }
+        ]
+    )
+
+    df_conceptos = pd.concat([df_conceptos, fila_total], ignore_index=True)
 
     # ==============================================================================
-    # 6. Exportación multi-hoja y Formatos
+    # PASO 3: REORGANIZACIÓN VISUAL (Únicamente para la hoja 'Datos')
+    # ==============================================================================
+    # Se asignan las columnas numéricas ya procesadas al df
+    df_datos = df.copy()
+    df_datos["VALOR"] = valores_numericos
+    if "SALDO" in df.columns:
+        df_datos["SALDO"] = saldos_numericos
+
+    # Crear indicador de reordenamiento (Negativos arriba = 0, Positivos abajo = 1)
+    is_negative = df_datos["VALOR"] < 0
+    df_datos["_orden_temp"] = 0
+    df_datos.loc[~is_negative, "_orden_temp"] = 1
+
+    # Se reordenan las filas ÚNICAMENTE AQUÍ al final
+    df_datos_ordenado = df_datos.sort_values(
+        by="_orden_temp", kind="stable"
+    ).drop(columns=["_orden_temp"])
+
+    # ==============================================================================
+    # PASO 4: EXPORTACIÓN Y FORMATO EN EXCEL
     # ==============================================================================
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
-        df_ordenado.to_excel(writer, sheet_name="Datos", index=False)
+        df_datos_ordenado.to_excel(writer, sheet_name="Datos", index=False)
         df_conciliacion.to_excel(writer, sheet_name="Resumen", index=False)
         df_conceptos.to_excel(writer, sheet_name="Conceptos", index=False)
 
@@ -429,7 +430,7 @@ def reorganizar_excel(excel_path):
                     "CARGOS",
                     "ABONOS",
                     "NETO",
-                    "MONTO",  # Aplica formato a la columna de la pestaña Resumen
+                    "MONTO",
                 ]:
                     for cell in col[1:]:
                         if cell.value is not None and isinstance(
