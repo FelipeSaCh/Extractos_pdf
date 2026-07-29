@@ -1,21 +1,23 @@
 import os
 import re
+import sys
 import pandas as pd
 import pdfplumber
-import sys
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 DELIMITADOR = "|||"
 
+
 # ==============================================================================
 # FUNCIONES AUXILIARES COMUNES
 # ==============================================================================
 def obtener_ruta_asset(ruta_relativa):
-    """ Obtiene la ruta absoluta para assets, funciona en desarrollo y en el .exe de PyInstaller """
-    if hasattr(sys, '_MEIPASS'):
+    """Obtiene la ruta absoluta para assets, funciona en desarrollo y en el .exe de PyInstaller."""
+    if hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, ruta_relativa)
     return os.path.join(os.path.abspath("."), ruta_relativa)
+
 
 def es_numero_financiero(texto):
     """Valida si un texto es un monto monetario (positivo, negativo o decimales)."""
@@ -32,10 +34,7 @@ _PATRON_NUM_TOKEN = re.compile(r"^\d+$")
 
 
 def limpiar_pie_pagina(words_fila):
-    """Elimina, token por token en orden X, la secuencia 'Página N de M' (o variantes:
-    'Pág. N de M', 'Página N', 'de M') sin importar si comparte fila con datos reales,
-    ya que pdfplumber puede fusionar el pie de página con la última fila de la tabla.
-    """
+    """Elimina la secuencia 'Página N de M' (o variantes) sin importar si comparte fila con datos reales."""
     n = len(words_fila)
     idx_a_quitar = set()
     i = 0
@@ -46,10 +45,14 @@ def limpiar_pie_pagina(words_fila):
             if j < n and _PATRON_NUM_TOKEN.match(words_fila[j]["text"].strip()):
                 seq.append(j)
                 j += 1
-                if j < n and _PATRON_DE_TOKEN.match(words_fila[j]["text"].strip()):
+                if j < n and _PATRON_DE_TOKEN.match(
+                    words_fila[j]["text"].strip()
+                ):
                     seq.append(j)
                     j += 1
-                    if j < n and _PATRON_NUM_TOKEN.match(words_fila[j]["text"].strip()):
+                    if j < n and _PATRON_NUM_TOKEN.match(
+                        words_fila[j]["text"].strip()
+                    ):
                         seq.append(j)
                         j += 1
             idx_a_quitar.update(seq)
@@ -71,12 +74,15 @@ def texto_delimitado_a_excel(lineas_texto, columnas, output_excel_path):
 
     df = pd.DataFrame(registros, columns=columnas)
     df.to_excel(output_excel_path, index=False)
+
+
 # ==============================================================================
-# PARSER 1: MOVIMIENTOS
+# PARSER 1: MOVIMIENTOS SOCIEDAD
 # ==============================================================================
 
-def extraer_lineas_movimientos(pdf_path):
-    """Extrae transacciones filtrando el pie de página ('Página X de Y') sin borrar la descripción que comparte línea."""
+
+def extraer_lineas_movimientos_soc(pdf_path):
+    """Extrae transacciones para Movimientos Sociedad (7 columnas)."""
     patron_fecha = r"^\b(?:\d{4}/\d{2}/\d{2}|\d{1,2}/\d{2}(?:/\d{2,4})?)\b"
     lineas_delimitadas = []
 
@@ -103,9 +109,6 @@ def extraer_lineas_movimientos(pdf_path):
 
             for y_key in sorted(filas_y.keys()):
                 words_brutas = sorted(filas_y[y_key], key=lambda x: x["x0"])
-
-                # Elimina la secuencia "Página N de M" sin importar si quedó
-                # pegada a la última transacción de la página.
                 words_linea = limpiar_pie_pagina(words_brutas)
 
                 if not words_linea:
@@ -138,7 +141,6 @@ def extraer_lineas_movimientos(pdf_path):
                         continue
                     words_a_procesar = words_linea
 
-                # Asignar las palabras válidas a sus respectivas columnas por coordenadas X
                 for w in words_a_procesar:
                     x_centro = (w["x0"] + w["x1"]) / 2.0
                     txt_w = w["text"]
@@ -154,8 +156,6 @@ def extraer_lineas_movimientos(pdf_path):
                     elif x_centro < x_max_doc:
                         tx_actual["DOCUMENTO"].append(txt_w)
                     else:
-                        # Solo se acepta como VALOR si realmente es numérico;
-                        # evita que un residuo de pie de página sobreescriba el valor real.
                         if es_numero_financiero(txt_w):
                             tx_actual["VALOR"] = txt_w
 
@@ -188,9 +188,147 @@ def extraer_lineas_movimientos(pdf_path):
 
     return lineas_delimitadas
 
+
 # ==============================================================================
-# PARSER 2: EXTRACTOS
+# PARSER 2: MOVIMIENTOS PERSONA NATURAL
 # ==============================================================================
+
+
+def extraer_lineas_movimientos_pn(pdf_path):
+    """Extrae transacciones para Movimientos Persona Natural de Bancolombia.
+
+    Incluye el año dentro de la fecha y limpia basura del valor numérico.
+    """
+    # Regex que contempla opcionalmente el año para capturar "23 abr 2026" o "23 abr"
+    patron_fecha_pn = r"^\d{1,2}\s+(?:ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\.?(?:\s+\d{4})?"
+    lineas_delimitadas = []
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words()
+            if not words:
+                continue
+
+            anc_pagina = page.width
+
+            x_limite_desc = anc_pagina * 0.50
+            x_limite_ref = anc_pagina * 0.76
+
+            filas_y = {}
+            for w in words:
+                y_key = round(w["top"] / 3.0) * 3.0
+                filas_y.setdefault(y_key, []).append(w)
+
+            transacciones_pagina = []
+            tx_actual = None
+
+            for y_key in sorted(filas_y.keys()):
+                words_brutas = sorted(filas_y[y_key], key=lambda x: x["x0"])
+                words_linea = limpiar_pie_pagina(words_brutas)
+
+                if not words_linea:
+                    continue
+
+                # Unimos las primeras 4 palabras para verificar si incluyen fecha + año
+                texto_linea_inicio = " ".join(
+                    [w["text"] for w in words_linea[:4]]
+                )
+                coincidencia_fecha = re.match(
+                    patron_fecha_pn, texto_linea_inicio, re.IGNORECASE
+                )
+
+                es_inicio_tx = bool(
+                    coincidencia_fecha
+                    and words_linea[0]["x0"] < (anc_pagina * 0.25)
+                )
+
+                if es_inicio_tx:
+                    if tx_actual:
+                        transacciones_pagina.append(tx_actual)
+
+                    fecha_str = coincidencia_fecha.group(0).strip()
+                    num_words_fecha = len(fecha_str.split())
+
+                    # Si el regex solo tomó "23 abr" pero la siguiente palabra es un año (ej. 2026), incluirla
+                    if (
+                        num_words_fecha < len(words_linea)
+                        and re.match(r"^\d{4}$", words_linea[num_words_fecha]["text"].strip())
+                    ):
+                        fecha_str += " " + words_linea[num_words_fecha]["text"].strip()
+                        num_words_fecha += 1
+
+                    tx_actual = {
+                        "FECHA": fecha_str,
+                        "DESCRIPCIÓN": [],
+                        "REFERENCIA": [],
+                        "VALOR_RAW": [],
+                    }
+                    words_a_procesar = words_linea[num_words_fecha:]
+                else:
+                    if not tx_actual:
+                        continue
+                    words_a_procesar = words_linea
+
+                for w in words_a_procesar:
+                    x_centro = (w["x0"] + w["x1"]) / 2.0
+                    txt_w = w["text"].strip()
+
+                    if not txt_w:
+                        continue
+
+                    if x_centro < x_limite_desc:
+                        tx_actual["DESCRIPCIÓN"].append(txt_w)
+                    elif x_centro < x_limite_ref:
+                        tx_actual["REFERENCIA"].append(txt_w)
+                    else:
+                        tx_actual["VALOR_RAW"].append(txt_w)
+
+            if tx_actual:
+                transacciones_pagina.append(tx_actual)
+
+            # Limpieza final de datos
+            for tx in transacciones_pagina:
+                desc_str = " ".join(tx["DESCRIPCIÓN"]).strip()
+                ref_str = " ".join(tx["REFERENCIA"]).strip()
+                cadena_valor_bruta = "".join(tx["VALOR_RAW"]).strip()
+
+                if (
+                    "FECHA" in tx["FECHA"].upper()
+                    or "DESCRIPCI" in desc_str.upper()
+                ):
+                    continue
+
+                # --- FILTRADO DE VALOR ---
+                es_negativo = "-" in cadena_valor_bruta
+                solo_num_y_puntos = re.sub(
+                    r"[^\d\.,]", "", cadena_valor_bruta
+                )
+
+                if "," in solo_num_y_puntos and "." in solo_num_y_puntos:
+                    solo_num_y_puntos = solo_num_y_puntos.replace(
+                        ".", ""
+                    ).replace(",", ".")
+                elif "," in solo_num_y_puntos:
+                    solo_num_y_puntos = solo_num_y_puntos.replace(",", ".")
+
+                match_monto = re.search(r"\d+(?:\.\d+)?", solo_num_y_puntos)
+
+                if match_monto:
+                    monto_final = match_monto.group(0)
+                    if es_negativo:
+                        monto_final = f"-{monto_final}"
+                else:
+                    monto_final = "0"
+
+                registro = [tx["FECHA"], desc_str, ref_str, monto_final]
+                lineas_delimitadas.append(DELIMITADOR.join(registro))
+
+    return lineas_delimitadas
+
+# ==============================================================================
+# PARSER 3: EXTRACTOS
+# ==============================================================================
+
 
 def extraer_lineas_extractos(pdf_path):
     """Extrae las transacciones para archivos de tipo 'Extracto'."""
@@ -206,7 +344,6 @@ def extraer_lineas_extractos(pdf_path):
             anc_pagina = page.width
             x_max_desc = anc_pagina * 0.40
             x_max_sucursal = anc_pagina * 0.65
-            x_max_dcto = anc_pagina * 0.78
 
             filas_y = {}
             for w in words:
@@ -215,8 +352,6 @@ def extraer_lineas_extractos(pdf_path):
 
             for y_key in sorted(filas_y.keys()):
                 words_ordenadas = sorted(filas_y[y_key], key=lambda x: x["x0"])
-
-                # Elimina la secuencia "Página N de M" aunque quede pegada a la fila.
                 words_linea = limpiar_pie_pagina(words_ordenadas)
 
                 if not words_linea:
@@ -288,17 +423,12 @@ def extraer_lineas_extractos(pdf_path):
 # REORGANIZACIÓN Y GENERACIÓN DE REPORTES EN EXCEL
 # ==============================================================================
 
-def reorganizar_excel(excel_path):
-    """1.
 
-    Calcula saldos, conciliación y conceptos sobre el DataFrame ORIGINAL sin alterar.
-    2. Al final, reordena las filas de la hoja 'Datos' (negativos arriba) para visualización.
-    3. Exporta a Excel con formato contable de OpenPyXL.
-    """
+def reorganizar_excel(excel_path):
+    """Calcula totales, conciliación y conceptos. La hoja 'Resumen' omite saldos si no aplican."""
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"No se encontró el archivo: {excel_path}")
 
-    # Cargar el DataFrame en su estado ORIGINAL (si el archivo ya tenía pestañas, lee la primera)
     xl = pd.ExcelFile(excel_path)
     sheet_a_leer = "Datos" if "Datos" in xl.sheet_names else 0
     df = pd.read_excel(excel_path, sheet_name=sheet_a_leer, dtype=str)
@@ -308,61 +438,62 @@ def reorganizar_excel(excel_path):
 
     col_desc = "DESCRIPCIÓN" if "DESCRIPCIÓN" in df.columns else "DESCRIPCION"
 
-    # ==============================================================================
-    # PASO 1: LIMPIEZA DE NÚMEROS EN EL DF ORIGINAL (SIN CAMBIAR EL ORDEN DE FILAS)
-    # ==============================================================================
+    # PASO 1: LIMPIEZA DE NÚMEROS
     valores_numericos = pd.to_numeric(
         df["VALOR"]
         .astype(str)
         .str.replace(",", "", regex=False)
         .str.replace("$", "", regex=False)
+        .str.replace(" ", "", regex=False)
         .str.strip(),
         errors="coerce",
     ).fillna(0.0)
 
+    tiene_columna_saldo = "SALDO" in df.columns
     saldos_numericos = pd.Series(dtype=float)
-    if "SALDO" in df.columns:
+
+    if tiene_columna_saldo:
         saldos_numericos = pd.to_numeric(
             df["SALDO"]
             .astype(str)
             .str.replace(",", "", regex=False)
             .str.replace("$", "", regex=False)
+            .str.replace(" ", "", regex=False)
             .str.strip(),
             errors="coerce",
         ).fillna(0.0)
 
-    # ==============================================================================
-    # PASO 2: CÁLCULOS SOBRE EL DF ORIGINAL (Saldos, Conciliación y Conceptos)
-    # ==============================================================================
-    # A. Saldos exactos desde la Fila 0 y la última fila del DF Original
-    saldo_anterior = 0.0
-    saldo_actual = 0.0
-
-    if not saldos_numericos.empty and not valores_numericos.empty:
-        saldo_anterior = saldos_numericos.iloc[0] - valores_numericos.iloc[0]
-        saldo_actual = saldos_numericos.iloc[-1]
-
-    # B. Totales globales de Cargos y Abonos
+    # PASO 2: CÁLCULOS SOBRE EL DF ORIGINAL
     cargos_sum = valores_numericos[valores_numericos < 0].sum()
     abonos_sum = valores_numericos[valores_numericos > 0].sum()
 
-    df_conciliacion = pd.DataFrame(
-        [
-            {"CONCEPTO": "SALDO ANTERIOR", "MONTO": saldo_anterior},
-            {"CONCEPTO": "TOTAL CARGOS", "MONTO": cargos_sum},
-            {"CONCEPTO": "TOTAL ABONOS", "MONTO": abonos_sum},
-            {"CONCEPTO": "SALDO ACTUAL", "MONTO": saldo_actual},
-        ]
-    )
+    filas_resumen = []
+    if tiene_columna_saldo and not saldos_numericos.empty:
+        # Corrección: El Saldo Anterior es el Saldo Inicial menos el Valor Ajustado del primer registro
+        saldo_anterior = saldos_numericos.iloc[0] - valores_numericos.iloc[0]
+        saldo_actual = saldos_numericos.iloc[-1]
+        filas_resumen.append(
+            {"CONCEPTO": "SALDO ANTERIOR", "MONTO": saldo_anterior}
+        )
 
-    # C. Agrupar por Conceptos (usando los valores numéricos calculados del DF original)
+    filas_resumen.append({"CONCEPTO": "TOTAL CARGOS", "MONTO": cargos_sum})
+    filas_resumen.append({"CONCEPTO": "TOTAL ABONOS", "MONTO": abonos_sum})
+
+    if tiene_columna_saldo and not saldos_numericos.empty:
+        filas_resumen.append(
+            {"CONCEPTO": "SALDO ACTUAL", "MONTO": saldo_actual}
+        )
+
+    df_conciliacion = pd.DataFrame(filas_resumen)
+
+    # Agrupar por Conceptos
     df_calc = df.copy()
     df_calc["_VALOR_NUM"] = valores_numericos
     df_calc["_CARGOS_TEMP"] = df_calc["_VALOR_NUM"].apply(
-        lambda x: x if x < 0 else 0
+        lambda x: x if x < 0 else 0.0
     )
     df_calc["_ABONOS_TEMP"] = df_calc["_VALOR_NUM"].apply(
-        lambda x: x if x > 0 else 0
+        lambda x: x if x > 0 else 0.0
     )
 
     df_conceptos = (
@@ -379,37 +510,30 @@ def reorganizar_excel(excel_path):
         [
             {
                 col_desc: "TOTAL GENERAL",
-                "CARGOS": df_conceptos["CARGOS"].sum(),
-                "ABONOS": df_conceptos["ABONOS"].sum(),
-                "NETO": df_conceptos["NETO"].sum(),
+                "CARGOS": float(df_conceptos["CARGOS"].sum()),
+                "ABONOS": float(df_conceptos["ABONOS"].sum()),
+                "NETO": float(df_conceptos["NETO"].sum()),
             }
         ]
     )
 
     df_conceptos = pd.concat([df_conceptos, fila_total], ignore_index=True)
 
-    # ==============================================================================
-    # PASO 3: REORGANIZACIÓN VISUAL (Únicamente para la hoja 'Datos')
-    # ==============================================================================
-    # Se asignan las columnas numéricas ya procesadas al df
+    # PASO 3: REORGANIZACIÓN VISUAL (Negativos arriba)
     df_datos = df.copy()
     df_datos["VALOR"] = valores_numericos
-    if "SALDO" in df.columns:
+    if tiene_columna_saldo:
         df_datos["SALDO"] = saldos_numericos
 
-    # Crear indicador de reordenamiento (Negativos arriba = 0, Positivos abajo = 1)
     is_negative = df_datos["VALOR"] < 0
     df_datos["_orden_temp"] = 0
     df_datos.loc[~is_negative, "_orden_temp"] = 1
 
-    # Se reordenan las filas ÚNICAMENTE AQUÍ al final
     df_datos_ordenado = df_datos.sort_values(
         by="_orden_temp", kind="stable"
     ).drop(columns=["_orden_temp"])
 
-    # ==============================================================================
     # PASO 4: EXPORTACIÓN Y FORMATO EN EXCEL
-    # ==============================================================================
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
         df_datos_ordenado.to_excel(writer, sheet_name="Datos", index=False)
         df_conciliacion.to_excel(writer, sheet_name="Resumen", index=False)
@@ -440,16 +564,23 @@ def reorganizar_excel(excel_path):
 
     return excel_path
 
+
 # ==============================================================================
-# ORQUESTADOR PRINCIPAL (MÉTODO ÚNICO DE ENTRADA)
+# ORQUESTADOR PRINCIPAL
 # ==============================================================================
+
 
 def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
-    """Detecta automáticamente si el PDF es de 'Movimientos' o 'Extracto' según el nombre del archivo y ejecuta la extracción correspondiente."""
+    """Detecta automáticamente el tipo de documento según el nombre del PDF."""
     nombre_archivo = os.path.basename(pdf_path).upper()
 
-    if "MOVIMIENTO" in nombre_archivo:
-        tipo = "MOVIMIENTOS"
+    if "MOVIMENTOSPNATURAL" in nombre_archivo or "MOVIMIENTOSPNATURAL" in nombre_archivo:
+        tipo = "MOVIMIENTOS_PNATURAL"
+        columnas = ["FECHA", "DESCRIPCIÓN", "REFERENCIA", "VALOR"]
+        lineas_plana = extraer_lineas_movimientos_pn(pdf_path)
+
+    elif "MOVIMIENTOSOC" in nombre_archivo or "MOVIMIENTO" in nombre_archivo:
+        tipo = "MOVIMIENTOS_SOC"
         columnas = [
             "FECHA",
             "DESCRIPCIÓN",
@@ -459,13 +590,13 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
             "DOCUMENTO",
             "VALOR",
         ]
-        lineas_plana = extraer_lineas_movimientos(pdf_path)
+        lineas_plana = extraer_lineas_movimientos_soc(pdf_path)
 
     elif "EXTRACTO" in nombre_archivo:
         tipo = "EXTRACTOS"
         columnas = [
             "FECHA",
-            "DESCRIPCION",
+            "DESCRIPCIÓN",
             "SUCURSAL",
             "DCTO.",
             "VALOR",
@@ -475,14 +606,13 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
 
     else:
         raise ValueError(
-            "El nombre del archivo no contiene la palabra 'Movimientos' ni 'Extracto'."
+            "El nombre del archivo no coincide con un prefijo válido "
+            "('MovimientosPNatural', 'MovimientoSOC' o 'Extracto')."
         )
 
     if not lineas_plana:
-
         return None
 
-    # Definir rutas de salida
     if not output_excel_path:
         base_path, _ = os.path.splitext(pdf_path)
         output_excel_path = f"{base_path}_convertido.xlsx"

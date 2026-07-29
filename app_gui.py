@@ -237,25 +237,35 @@ class PDFViewerApp:
 
         
         self._build_warning_box(left_frame)
-
-        btn_load = ttk.Button(
+# Botón para Extractos
+        self.btn_extractos = ttk.Button(
             left_frame,
-            text="📄 Cargar PDF de extractos",
+            text="📄 Cargar Extracto",
             command=lambda: self.cargar_y_procesar_pdf("Extracto"),
             style="Primary.TButton",
             cursor="hand2",
         )
-        btn_load.pack(fill=tk.X, pady=6)
+        self.btn_extractos.pack(fill=tk.X, pady=6)
 
-        btn_load_movimientos = ttk.Button(
+        # Botón para Movimientos Persona Natural
+        self.btn_movimientos_pn = ttk.Button(
             left_frame,
-            text="📄 Cargar PDF de movimientos",
-            command=lambda: self.cargar_y_procesar_pdf("Movimientos"),
+            text="📄 Movimientos Persona Natural",
+            command=lambda: self.cargar_y_procesar_pdf("MovimientosPNatural"),
             style="Primary.TButton",
             cursor="hand2",
-        ) 
-        btn_load_movimientos.pack(fill=tk.X, pady=6)
+        )
+        self.btn_movimientos_pn.pack(fill=tk.X, pady=6)
 
+        # Botón para Movimientos Sociedad
+        self.btn_movimientos_soc = ttk.Button(
+            left_frame,
+            text="📄 Movimientos Sociedad",
+            command=lambda: self.cargar_y_procesar_pdf("MovimientoSOC"),
+            style="Primary.TButton",
+            cursor="hand2",
+        )
+        self.btn_movimientos_soc.pack(fill=tk.X, pady=6)
         btn_load_excel = ttk.Button(
                 left_frame,
                 text="📊 Cargar Excel",
@@ -418,7 +428,7 @@ class PDFViewerApp:
 
     def cargar_y_procesar_pdf(self, prefijo_tipo):
         file_path = filedialog.askopenfilename(
-            title=f"Seleccionar PDF de {prefijo_tipo.lower()}",
+            title=f"Seleccionar PDF de {prefijo_tipo}",
             filetypes=[("Archivos PDF", "*.pdf")],
         )
 
@@ -429,9 +439,15 @@ class PDFViewerApp:
             folder_path, old_filename = os.path.split(file_path)
             filename_lower = old_filename.lower()
 
-            # 1. Evitar duplicar prefijos ("Extracto_" / "Movimiento_")
+            # Lista de prefijos conocidos para evitar la duplicación de nombres
             prefijo_formateado = f"{prefijo_tipo}_"
-            etiquetas_existentes = ["extracto_", "movimiento_", "movimientos_"]
+            etiquetas_existentes = [
+                "extracto_",
+                "movimiento_",
+                "movimientos_",
+                "movimientospnatural_",
+                "movimientosoc_",
+            ]
 
             ya_tiene_prefijo = any(
                 filename_lower.startswith(tag) for tag in etiquetas_existentes
@@ -445,12 +461,11 @@ class PDFViewerApp:
                     os.replace(file_path, new_file_path)
                     file_path = new_file_path
 
-            # 2. Asignaciones y carga visual del PDF
+            # Guardar ruta y tipo actual
             self.current_pdf_path = file_path
             self.tipo_documento = prefijo_tipo
             self.load_pdf(file_path)
 
-            # 3. HABILITAR EL BOTÓN DE LIMPIAR (Agrega esta parte aquí)
             if hasattr(self, "btn_limpiar") and self.btn_limpiar:
                 try:
                     self.btn_limpiar.configure(state="normal")
@@ -539,27 +554,20 @@ class PDFViewerApp:
         if ejecutar_proceso_exportacion is None:
             messagebox.showerror(
                 "Error de Módulo",
-                f"No se pudo importar 'script.py':\n{_import_error_msg}",
+                f"No se pudo importar el script de backend:\n{_import_error_msg}",
             )
             return
 
-        # ==============================================================================
-        # CONSTRUCCIÓN INTELIGENTE DEL NOMBRE SUGERIDO (SIN DUPLICAR ETIQUETAS)
-        # ==============================================================================
         nombre_base_pdf = os.path.splitext(
             os.path.basename(self.pdf_engine.current_path)
         )[0]
         nombre_lower = nombre_base_pdf.lower()
 
-        # 1. Determinar el tipo de documento para sugerir el prefijo adecuado
-        if "movimiento" in nombre_lower:
-            etiqueta_sugerida = "Movimiento_"
-        else:
-            etiqueta_sugerida = (
-                "Extracto_"  # Por defecto si es extracto o no tiene etiqueta
-            )
+        # Determinar el tipo de documento activo
+        tipo_actual = getattr(self, "tipo_documento", "Extracto")
+        etiqueta_sugerida = f"{tipo_actual}_"
 
-        # 2. Verificar si el archivo YA tiene alguna etiqueta de clasificación
+        # Palabras clave ampliadas
         palabras_clave = [
             "extracto_",
             "extracto",
@@ -567,19 +575,19 @@ class PDFViewerApp:
             "movimientos_",
             "movimiento",
             "movimientos",
+            "movimientospnatural_",
+            "movimientospnatural",
+            "movimientosoc_",
+            "movimientosoc",
         ]
         ya_tiene_etiqueta = any(
-            nombre_lower.startswith(p) or nombre_lower.endswith(p)
-            for p in palabras_clave
+            nombre_lower.startswith(p) for p in palabras_clave
         )
 
-        # 3. Construir el nombre final sugerido para el diálogo de guardado
         if not ya_tiene_etiqueta:
             nombre_sugerido = f"{etiqueta_sugerida}{nombre_base_pdf}.xlsx"
         else:
             nombre_sugerido = f"{nombre_base_pdf}.xlsx"
-
-        # ==============================================================================
 
         save_path = filedialog.asksaveasfilename(
             title="Guardar archivo Excel como...",

@@ -5,7 +5,7 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
-## [1.1.4] - 2026-07-28
+## [1.1.5] - 2026-07-29
 ### Añadido
 
 - Nuevo modulo de movimientos
@@ -15,6 +15,8 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Se añade "Limpiar sesion" para liberar memoria y archivos ocupados por la app
 - Se añade settings.json
 - Boton de carga de excel
+- Boton para cargar movimiento de persona natural
+- Transformacion para movimiento de persona natural
 
 ### Modificado
 -Se modifican formatos
@@ -23,3 +25,4 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Script de back para manejar la lectura de movimientos
 - Se corrige recalculacion erronea al re-organizar Dataframe
 - Se elimina boton de "Reorganizar" y se integra funcion al crear .xlsx/.tx
+- Cambio de nombre para boton de movimiento a Movimiento Sociedades
