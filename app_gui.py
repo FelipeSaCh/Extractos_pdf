@@ -255,6 +255,16 @@ class PDFViewerApp:
             cursor="hand2",
         ) 
         btn_load_movimientos.pack(fill=tk.X, pady=6)
+
+        btn_load_excel = ttk.Button(
+                left_frame,
+                text="📊 Cargar Excel",
+                command=self.cargar_archivo_excel,  # <--- Vinculación agregada
+                style="Primary.TButton",
+                cursor="hand2",
+            )
+        btn_load_excel.pack(fill=tk.X, pady=6)
+
 # Crear el botón "Limpiar / Nuevo Documento"
         self.btn_limpiar = tk.Button(
             left_frame,  # o el frame/contenedor donde tengas tus botones
@@ -280,7 +290,7 @@ class PDFViewerApp:
 
         self.btn_open_excel = ttk.Button(
             left_frame,
-            text="🟢  Abrir Excel",
+            text="↗️ Abrir Excel",
             command=self.open_excel,
             state=tk.DISABLED,
             style="Secondary.TButton",
@@ -366,6 +376,46 @@ class PDFViewerApp:
         # ------------------------------------------------------------------
     # Lógica y Eventos
     # ------------------------------------------------------------------
+    def cargar_archivo_excel(self):
+        """Abre un explorador para seleccionar un archivo .xlsx y cargarlo en la interfaz."""
+        file_path = filedialog.askopenfilename(
+            title="Seleccionar archivo Excel",
+            filetypes=[("Archivos de Excel", "*.xlsx;*.xls")],
+        )
+
+        if not file_path:
+            return
+
+        try:
+            # 1. Guardar la ruta en el motor si existe la referencia
+            if hasattr(self, "pdf_engine") and self.pdf_engine:
+                self.pdf_engine.last_excel_path = file_path
+
+            # 2. Renderizar el Excel en la pestaña del Treeview
+            self.cargar_excel_en_gui(file_path)
+
+            # 3. Actualizar la etiqueta de información y los botones
+            filename = os.path.basename(file_path)
+            self.info_label.config(
+                text=f"📊 Excel cargado:\n{filename}",
+                style="Status.TLabel",
+            )
+
+            # Habilitar el botón de abrir ejecutable/Excel externo y el de limpiar
+            if hasattr(self, "btn_open_excel") and self.btn_open_excel:
+                self.btn_open_excel.config(
+                    state=tk.NORMAL, style="Secondary.TButton"
+                )
+
+            if hasattr(self, "btn_limpiar") and self.btn_limpiar:
+                self.btn_limpiar.config(state="normal")
+
+        except Exception as e:
+            messagebox.showerror(
+                "Error de Carga",
+                f"No se pudo cargar el archivo Excel:\n{str(e)}",
+            )
+
     def cargar_y_procesar_pdf(self, prefijo_tipo):
         file_path = filedialog.askopenfilename(
             title=f"Seleccionar PDF de {prefijo_tipo.lower()}",
@@ -400,7 +450,7 @@ class PDFViewerApp:
             self.tipo_documento = prefijo_tipo
             self.load_pdf(file_path)
 
-            # 🟢 3. HABILITAR EL BOTÓN DE LIMPIAR (Agrega esta parte aquí)
+            # 3. HABILITAR EL BOTÓN DE LIMPIAR (Agrega esta parte aquí)
             if hasattr(self, "btn_limpiar") and self.btn_limpiar:
                 try:
                     self.btn_limpiar.configure(state="normal")
@@ -441,7 +491,7 @@ class PDFViewerApp:
 
         except Exception as e:
             messagebox.showerror(
-                "Error de Carga", f"No se pudo cargar el PDF:\n{str(e)}"
+                "Error de Carga", f"No se pudo cargar el PDF:\n{str(e)}"    
             )
     def generar_nombre_limpio(
         ruta_original, tipo_documento="Extracto_", extension_salida=".xlsx"
