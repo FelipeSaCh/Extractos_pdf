@@ -13,6 +13,8 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Se pone "Movimimientos en mantenimiento para correccion de bugs"
 - Se añade saldo anterior y saldo actual a la hoja de resumen
 - Se añade "Limpiar sesion" para liberar memoria y archivos ocupados por la app
+- Se añade settings.json
+- Boton de carga de excel
 
 ### Modificado
 -Se modifican formatos
@@ -20,4 +22,4 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Cambios visuales para app_gui.py
 - Script de back para manejar la lectura de movimientos
 - Se corrige recalculacion erronea al re-organizar Dataframe
-- Se elimina boton de "Reorganizar" y se integra funcion al crear .xlsx/.txt
+- Se elimina boton de "Reorganizar" y se integra funcion al crear .xlsx/.tx
