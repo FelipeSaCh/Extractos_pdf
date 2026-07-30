@@ -193,13 +193,12 @@ def extraer_lineas_movimientos_soc(pdf_path):
 # PARSER 2: MOVIMIENTOS PERSONA NATURAL
 # ==============================================================================
 
-
 def extraer_lineas_movimientos_pn(pdf_path):
     """Extrae transacciones para Movimientos Persona Natural de Bancolombia.
 
-    Incluye el año dentro de la fecha y limpia basura del valor numérico.
+    Corrige la captura del año completo (evitando '202') y descarta metadatos de
+    pie de página como 'Dirección IP'.
     """
-    # Regex que contempla opcionalmente el año para capturar "23 abr 2026" o "23 abr"
     patron_fecha_pn = r"^\d{1,2}\s+(?:ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\.?(?:\s+\d{4})?"
     lineas_delimitadas = []
 
@@ -229,10 +228,24 @@ def extraer_lineas_movimientos_pn(pdf_path):
                 if not words_linea:
                     continue
 
-                # Unimos las primeras 4 palabras para verificar si incluyen fecha + año
-                texto_linea_inicio = " ".join(
-                    [w["text"] for w in words_linea[:4]]
-                )
+                # --- 1. FILTRADO DE 'DIRECCIÓN IP' ---
+                # Si la línea contiene metadatos de pie de página, los removemos antes de clasificar
+                words_filtradas = []
+                ignorar_siguientes = False
+                for idx, w in enumerate(words_linea):
+                    txt_clean = w["text"].strip().lower()
+                    
+                    # Detectar si inicia "Dirección IP"
+                    if "direcci" in txt_clean or txt_clean == "ip" or "181.137" in txt_clean:
+                        continue
+                    words_filtradas.append(w)
+
+                words_linea = words_filtradas
+                if not words_linea:
+                    continue
+
+                # --- 2. CAPTURA Y VALIDACIÓN DE FECHA ---
+                texto_linea_inicio = " ".join([w["text"] for w in words_linea[:4]])
                 coincidencia_fecha = re.match(
                     patron_fecha_pn, texto_linea_inicio, re.IGNORECASE
                 )
@@ -249,13 +262,12 @@ def extraer_lineas_movimientos_pn(pdf_path):
                     fecha_str = coincidencia_fecha.group(0).strip()
                     num_words_fecha = len(fecha_str.split())
 
-                    # Si el regex solo tomó "23 abr" pero la siguiente palabra es un año (ej. 2026), incluirla
-                    if (
-                        num_words_fecha < len(words_linea)
-                        and re.match(r"^\d{4}$", words_linea[num_words_fecha]["text"].strip())
-                    ):
-                        fecha_str += " " + words_linea[num_words_fecha]["text"].strip()
-                        num_words_fecha += 1
+                    # Asegurar año de 4 dígitos si está presente inmediatamente después
+                    if num_words_fecha < len(words_linea):
+                        posible_anio = words_linea[num_words_fecha]["text"].strip()
+                        if re.match(r"^\d{4}$", posible_anio):
+                            fecha_str = f"{' '.join(fecha_str.split()[:2])} {posible_anio}"
+                            num_words_fecha += 1
 
                     tx_actual = {
                         "FECHA": fecha_str,
@@ -269,6 +281,7 @@ def extraer_lineas_movimientos_pn(pdf_path):
                         continue
                     words_a_procesar = words_linea
 
+                # --- 3. CLASIFICACIÓN DE COLUMNAS POR COORDENADAS ---
                 for w in words_a_procesar:
                     x_centro = (w["x0"] + w["x1"]) / 2.0
                     txt_w = w["text"].strip()
@@ -286,7 +299,7 @@ def extraer_lineas_movimientos_pn(pdf_path):
             if tx_actual:
                 transacciones_pagina.append(tx_actual)
 
-            # Limpieza final de datos
+            # --- 4. FORMATO FINAL Y LIMPIEZA DE VALORES ---
             for tx in transacciones_pagina:
                 desc_str = " ".join(tx["DESCRIPCIÓN"]).strip()
                 ref_str = " ".join(tx["REFERENCIA"]).strip()
@@ -298,16 +311,11 @@ def extraer_lineas_movimientos_pn(pdf_path):
                 ):
                     continue
 
-                # --- FILTRADO DE VALOR ---
                 es_negativo = "-" in cadena_valor_bruta
-                solo_num_y_puntos = re.sub(
-                    r"[^\d\.,]", "", cadena_valor_bruta
-                )
+                solo_num_y_puntos = re.sub(r"[^\d\.,]", "", cadena_valor_bruta)
 
                 if "," in solo_num_y_puntos and "." in solo_num_y_puntos:
-                    solo_num_y_puntos = solo_num_y_puntos.replace(
-                        ".", ""
-                    ).replace(",", ".")
+                    solo_num_y_puntos = solo_num_y_puntos.replace(".", "").replace(",", ".")
                 elif "," in solo_num_y_puntos:
                     solo_num_y_puntos = solo_num_y_puntos.replace(",", ".")
 

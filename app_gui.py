@@ -13,6 +13,11 @@ except ImportError as err:
     reorganizar_excel = None
     _import_error_msg = str(err)
 
+try:
+    from parser_excel import extraer_datos_desde_excel
+except ImportError as err:
+    extraer_datos_desde_excel = None
+    _import_parser_error_msg = str(err)
 
 # ------------------------------------------------------------------
 # Paleta y constantes visuales
@@ -387,9 +392,19 @@ class PDFViewerApp:
     # Lógica y Eventos
     # ------------------------------------------------------------------
     def cargar_archivo_excel(self):
-        """Abre un explorador para seleccionar un archivo .xlsx y cargarlo en la interfaz."""
+        """Abre un explorador para seleccionar un archivo .xlsx, lo procesa con
+
+        parser_excel.py y muestra el resultado filtrado en la interfaz.
+        """
+        if extraer_datos_desde_excel is None:
+            messagebox.showerror(
+                "Error de Módulo",
+                f"No se pudo importar 'parser_excel.py':\n{_import_parser_error_msg}",
+            )
+            return
+
         file_path = filedialog.askopenfilename(
-            title="Seleccionar archivo Excel",
+            title="Seleccionar archivo Excel a procesar",
             filetypes=[("Archivos de Excel", "*.xlsx;*.xls")],
         )
 
@@ -397,21 +412,37 @@ class PDFViewerApp:
             return
 
         try:
-            # 1. Guardar la ruta en el motor si existe la referencia
-            if hasattr(self, "pdf_engine") and self.pdf_engine:
-                self.pdf_engine.last_excel_path = file_path
-
-            # 2. Renderizar el Excel en la pestaña del Treeview
-            self.cargar_excel_en_gui(file_path)
-
-            # 3. Actualizar la etiqueta de información y los botones
-            filename = os.path.basename(file_path)
+            self.root.config(cursor="watch")
             self.info_label.config(
-                text=f"📊 Excel cargado:\n{filename}",
+                text="⏳ Procesando y reorganizando Excel...",
+                style="Info.TLabel",
+            )
+            self.root.update_idletasks()
+
+            # Definir la ruta de salida para el Excel procesado
+            base_dir, file_name = os.path.split(file_path)
+            name, ext = os.path.splitext(file_name)
+            output_path = os.path.join(base_dir, f"{name}_procesado{ext}")
+
+            # 1. Llamar a la función del nuevo archivo 'parser_excel.py'
+            excel_procesado = extraer_datos_desde_excel(
+                file_path, output_path
+            )
+
+            # 2. Guardar la ruta en el motor de la app
+            if hasattr(self, "pdf_engine") and self.pdf_engine:
+                self.pdf_engine.last_excel_path = excel_procesado
+
+            # 3. Renderizar las pestañas (Movimientos y Resumen) en el Treeview
+            self.cargar_excel_en_gui(excel_procesado)
+
+            # 4. Actualizar estado y botones de la interfaz
+            filename_clean = os.path.basename(excel_procesado)
+            self.info_label.config(
+                text=f"📊 Excel procesado:\n{filename_clean}",
                 style="Status.TLabel",
             )
 
-            # Habilitar el botón de abrir ejecutable/Excel externo y el de limpiar
             if hasattr(self, "btn_open_excel") and self.btn_open_excel:
                 self.btn_open_excel.config(
                     state=tk.NORMAL, style="Secondary.TButton"
@@ -420,11 +451,22 @@ class PDFViewerApp:
             if hasattr(self, "btn_limpiar") and self.btn_limpiar:
                 self.btn_limpiar.config(state="normal")
 
-        except Exception as e:
-            messagebox.showerror(
-                "Error de Carga",
-                f"No se pudo cargar el archivo Excel:\n{str(e)}",
+            messagebox.showinfo(
+                "Proceso Exitoso",
+                f"El archivo Excel se ha formateado correctamente.\n\nGuardado en:\n{excel_procesado}",
             )
+
+        except Exception as e:
+            self.info_label.config(
+                text="⚠️ Error al procesar el Excel.",
+                style="Info.TLabel",
+            )
+            messagebox.showerror(
+                "Error de Procesamiento",
+                f"No se pudo estructurar el archivo Excel:\n{str(e)}",
+            )
+        finally:
+            self.root.config(cursor="")
 
     def cargar_y_procesar_pdf(self, prefijo_tipo):
         file_path = filedialog.askopenfilename(
