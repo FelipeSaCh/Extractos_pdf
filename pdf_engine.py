@@ -6,23 +6,21 @@ class PDFEngine:
     def __init__(self):
         self.doc = None
         self.current_path = None
-        self.last_excel_path = None
-        self.page_images = []
         self.last_pdf_path = None
         self.last_excel_path = None
-
-    def liberar_recursos(self):
-        """Reset de variables para que el motor olvide los archivos cargados."""
-        self.last_excel_path = None
-        self.last_pdf_path=None
-
-        if hasattr(self, 'df_original_raw'):
-            self.df_original_raw = None
+        self.page_images = []
+        self.df_original_raw = None
 
     def open_pdf(self, path: str, zoom: float = 1.5):
         """Abre el PDF y prepara las imágenes para Tkinter."""
         self.current_path = path
+        self.last_pdf_path = path
         self.last_excel_path = None
+        
+        # Prevenir fugas de memoria si ya había un PDF abierto sin cerrar
+        if self.doc:
+            self.doc.close()
+            
         self.doc = fitz.open(path)
         self.page_images.clear()
 
@@ -48,13 +46,21 @@ class PDFEngine:
             return True
         return False
 
-    def close(self):
+    def liberar_recursos(self):
+        """Reset total de variables para que el motor olvide los archivos cargados."""
         if self.doc:
             self.doc.close()
             self.doc = None
+            
         self.current_path = None
+        self.last_pdf_path = None
         self.last_excel_path = None
         self.page_images.clear()
+        self.df_original_raw = None
+
+    # Redirigir close() a liberar_recursos() para mantener consistencia
+    def close(self):
+        self.liberar_recursos()
 
     @property
     def has_document(self) -> bool:
