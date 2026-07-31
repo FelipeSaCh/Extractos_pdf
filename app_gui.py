@@ -6,6 +6,10 @@ from pdf_engine import PDFEngine
 from PIL import Image, ImageTk
 from version import __version__
 
+# ---- AGREGA ESTA LÍNEA ----
+from clasificador_conceptos import ClasificadorConceptos 
+# ---------------------------
+
 try:
     from script import ejecutar_proceso_exportacion, reorganizar_excel
 except ImportError as err:
@@ -280,6 +284,15 @@ class PDFViewerApp:
             )
         btn_load_excel.pack(fill=tk.X, pady=6)
 
+        btn_editarbancarios = ttk.Button(
+            left_frame,
+            text="✏️ Editar Bancarios",
+            command=lambda: self.abrir_clasificador(),  # <--- Usamos un método intermediario o lambda
+            style="Primary.TButton",
+            cursor="hand2",
+        )
+        btn_editarbancarios.pack(fill=tk.X, pady=6)
+
 # Crear el botón "Limpiar / Nuevo Documento"
         self.btn_limpiar = tk.Button(
             left_frame,  # o el frame/contenedor donde tengas tus botones
@@ -391,6 +404,21 @@ class PDFViewerApp:
         # ------------------------------------------------------------------
     # Lógica y Eventos
     # ------------------------------------------------------------------
+
+    def abrir_clasificador(self):
+        # Verificamos si ya hay un Excel generado y cargado en el sistema
+        ruta_excel = getattr(self.pdf_engine, "last_excel_path", None)
+        
+        if not ruta_excel:
+            messagebox.showwarning(
+                "Aviso", 
+                "Primero debes procesar un PDF para generar un archivo Excel."
+            )
+            return
+            
+        # Si existe, abrimos el clasificador pasándole la ruta actual
+        ClasificadorConceptos(self.root, ruta_excel, self.cargar_excel_en_gui)
+        
     def cargar_archivo_excel(self):
         """Abre un explorador para seleccionar un archivo .xlsx, lo procesa con
 
@@ -665,7 +693,7 @@ class PDFViewerApp:
                 ),
                 style="Status.TLabel",
             )
-
+            ClasificadorConceptos(self.root, excel_generado, self.cargar_excel_en_gui)
             self.cargar_excel_en_gui(excel_generado)
 
             messagebox.showinfo(
