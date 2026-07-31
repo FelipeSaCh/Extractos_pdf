@@ -5,7 +5,7 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
-## [1.1.6] - 2026-07-30
+## [1.1.7] - 2026-07-31
 ### Añadido
 
 - Nuevo modulo de movimientos
@@ -18,6 +18,7 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Boton para cargar movimiento de persona natural
 - Transformacion para movimiento de persona natural
 - Se adiciona funcionalidad para trasnformacion de extractos originales en excel
+- Nueva ventana emergente para especificar informacion bancaria y organizacion de Dataframe
 
 ### Modificado
 -Se modifican formatos
