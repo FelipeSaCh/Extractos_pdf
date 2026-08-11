@@ -471,13 +471,12 @@ def reorganizar_excel(excel_path):
             errors="coerce",
         ).fillna(0.0)
 
-    # PASO 2: CÁLCULOS SOBRE EL DF ORIGINAL
+    # PASO 2: CÁLCULOS SOBRE EL DF ORIGINAL Y EXTRACCIÓN DE MES
     cargos_sum = valores_numericos[valores_numericos < 0].sum()
     abonos_sum = valores_numericos[valores_numericos > 0].sum()
 
     filas_resumen = []
     if tiene_columna_saldo and not saldos_numericos.empty:
-        # Corrección: El Saldo Anterior es el Saldo Inicial menos el Valor Ajustado del primer registro
         saldo_anterior = saldos_numericos.iloc[0] - valores_numericos.iloc[0]
         saldo_actual = saldos_numericos.iloc[-1]
         filas_resumen.append(
@@ -494,8 +493,19 @@ def reorganizar_excel(excel_path):
 
     df_conciliacion = pd.DataFrame(filas_resumen)
 
-    # Agrupar por Conceptos
+    # --- NUEVA LÓGICA DE EXTRACCIÓN DE MES ---
     df_calc = df.copy()
+    
+    # Extraer el mes convirtiendo a datetime de forma flexible
+    # Mantiene formato seguro incluso si las fechas son DD/MM o YYYY/MM/DD
+    fechas_dt = pd.to_datetime(df_calc["FECHA"], errors="coerce", dayfirst=True,format="mixed")
+    
+    # Si alguna fecha no fue parseada directamente (ej: '30/05'), intentamos extraera manualmente vía Regex
+    meses_extraidos = fechas_dt.dt.month.fillna(
+        df_calc["FECHA"].astype(str).str.extract(r"[/.-](\d{1,2})", expand=False)
+    )
+    
+    df_calc["MES"] = pd.to_numeric(meses_extraidos, errors="coerce").fillna(0).astype(int)
     df_calc["_VALOR_NUM"] = valores_numericos
     df_calc["_CARGOS_TEMP"] = df_calc["_VALOR_NUM"].apply(
         lambda x: x if x < 0 else 0.0
@@ -504,28 +514,54 @@ def reorganizar_excel(excel_path):
         lambda x: x if x > 0 else 0.0
     )
 
-    df_conceptos = (
-        df_calc.groupby(col_desc, as_index=False)
+# Agrupar por MES y DESCRIPCIÓN
+    df_grouped = (
+        df_calc.groupby(["MES", col_desc], as_index=False)
         .agg(
             CARGOS=("_CARGOS_TEMP", "sum"),
             ABONOS=("_ABONOS_TEMP", "sum"),
             NETO=("_VALOR_NUM", "sum"),
         )
-        .sort_values(by="CARGOS", ascending=True)
+        .sort_values(by=["MES", "CARGOS"], ascending=[True, True])
     )
 
-    fila_total = pd.DataFrame(
-        [
-            {
-                col_desc: "TOTAL GENERAL",
-                "CARGOS": float(df_conceptos["CARGOS"].sum()),
-                "ABONOS": float(df_conceptos["ABONOS"].sum()),
-                "NETO": float(df_conceptos["NETO"].sum()),
-            }
-        ]
-    )
+    # --- INSERCIÓN DE 3 FILAS EN BLANCO POR CAMBIO DE MES Y TOTAL ---
+    filas_con_espacios = []
+    meses_unicos = df_grouped["MES"].unique()
 
-    df_conceptos = pd.concat([df_conceptos, fila_total], ignore_index=True)
+    # Fila vacía base con la misma estructura
+    fila_vacia = {
+        "MES": "",
+        col_desc: "",
+        "CARGOS": None,
+        "ABONOS": None,
+        "NETO": None,
+    }
+
+    for i, mes in enumerate(meses_unicos):
+        # Filtrar registros del mes actual
+        df_mes = df_grouped[df_grouped["MES"] == mes]
+        filas_con_espacios.extend(df_mes.to_dict("records"))
+
+        # Si no es el último grupo de meses, agregar 3 filas vacías
+        if i < len(meses_unicos) - 1:
+            filas_con_espacios.extend([fila_vacia.copy() for _ in range(3)])
+
+    # Agregar 3 filas en blanco antes del TOTAL GENERAL
+    filas_con_espacios.extend([fila_vacia.copy() for _ in range(3)])
+
+    # Fila del Total General
+    fila_total = {
+        "MES": "",
+        col_desc: "TOTAL GENERAL",
+        "CARGOS": float(df_grouped["CARGOS"].sum()),
+        "ABONOS": float(df_grouped["ABONOS"].sum()),
+        "NETO": float(df_grouped["NETO"].sum()),
+    }
+    filas_con_espacios.append(fila_total)
+
+    # Crear el DataFrame final para la hoja Conceptos
+    df_conceptos = pd.DataFrame(filas_con_espacios)
 
     # PASO 3: REORGANIZACIÓN VISUAL (Negativos arriba)
     df_datos = df.copy()

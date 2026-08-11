@@ -74,7 +74,7 @@ def aplicar_estilos_segun_imagen(excel_path):
                 ):
                     cell.number_format = FORMATO_MONEDA_IMAGEN
                     cell.alignment = align_right
-                elif header_val in ["FECHA", "DCTO", "SUCURSAL", "OBSERVACION"]:
+                elif header_val in ["FECHA", "DCTO", "SUCURSAL", "OBSERVACION","MES"]:
                     cell.alignment = align_center
                 else:
                     cell.alignment = align_left

@@ -5,7 +5,7 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
-## [1.1.7] - 2026-07-31
+## [1.1.8] - 2026-08-11
 ### Añadido
 
 - Nuevo modulo de movimientos
@@ -19,6 +19,7 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Transformacion para movimiento de persona natural
 - Se adiciona funcionalidad para trasnformacion de extractos originales en excel
 - Nueva ventana emergente para especificar informacion bancaria y organizacion de Dataframe
+- Columna para conceptos por "Mes"
 
 ### Modificado
 -Se modifican formatos
@@ -29,3 +30,4 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Se elimina boton de "Reorganizar" y se integra funcion al crear .xlsx/.tx
 - Cambio de nombre para boton de movimiento a Movimiento Sociedades
 - Fix: movimientos de P.Natural con texto fuera de la informacion contable
+- En la hoja conceptos, se dejan lineas separadas por cada mes

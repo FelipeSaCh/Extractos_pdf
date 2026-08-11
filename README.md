@@ -81,7 +81,7 @@ Una vez abierta la interfaz:
 
 Este proyecto adopta **Semantic Versioning (SemVer)** para gestionar las versiones del programa de forma ordenada y siguiendo las mejores prácticas de la industria.
 
-* **Versión Actual:** `v1.0.0`
+* **Versión Actual:** `v1.1.8`
 * **Historial de Cambios:** Todos los cambios detallados de cada versión se encuentran en el archivo [CHANGELOG.md](file:///c:/Users/USUARIO/Desktop/Proyectos/extractos_pdf/CHANGELOG.md).
 
 ### 📦 Compilación a Ejecutable (.exe)
