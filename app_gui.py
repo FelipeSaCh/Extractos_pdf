@@ -5,10 +5,14 @@ import pandas as pd
 from pdf_engine import PDFEngine
 from PIL import Image, ImageTk
 from version import __version__
-
-# ---- AGREGA ESTA LÍNEA ----
 from clasificador_conceptos import ClasificadorConceptos 
-# ---------------------------
+# Importación del backend de Banco de Bogotá
+try:
+    from script_ban_bogota import ejecutar_proceso_exportacion as exportar_bogota
+    _import_error_msg = None
+except Exception as e:
+    exportar_bogota = None
+    _import_error_msg = str(e)
 
 try:
     from script import ejecutar_proceso_exportacion, reorganizar_excel
@@ -187,7 +191,7 @@ class PDFViewerApp:
                 "⚠️ Recuerde que este programa únicamente puede usarse con"
                 " archivos PDF que contengan texto (no imágenes escaneadas), y"
                 " que el soporte actual es exclusivo para extractos con el"
-                " formato de Bancolombia."
+                " formato de Bancolombia y Banco de Bogotá. Otros bancos pueden no ser compatibles hasta el momento"
             ),
             bg="#FDECEA",
             fg="#D93025",
@@ -244,7 +248,39 @@ class PDFViewerApp:
             fill=tk.X, pady=(0, 18)
         )
 
-        
+        # Bloque de selección de banco: primer paso obligatorio, muy visible.
+        banco_frame = tk.Frame(
+            left_frame,
+            bg="#EAF1FB",
+            highlightbackground=COLOR_PRIMARY,
+            highlightthickness=1,
+            bd=0,
+        )
+        banco_frame.pack(fill=tk.X, pady=(0, 15))
+
+        lbl_banco = tk.Label(
+            banco_frame,
+            text="  Selecciona tu banco",
+            bg="#EAF1FB",
+            fg=COLOR_PRIMARY_DARK,
+            font=("Segoe UI", 10, "bold"),
+        )
+        lbl_banco.pack(anchor="w", padx=10, pady=(10, 4))
+
+        self.combo_bancos = ttk.Combobox(
+            banco_frame,
+            values=[
+                "-- Selecciona un banco --",
+                "Bancolombia (Estándar)",
+                "Banco de Bogotá (Extractos PyME)",
+            ],
+            state="readonly",
+            font=("Segoe UI", 10),
+        )
+        self.combo_bancos.current(0)
+        self.combo_bancos.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self.combo_bancos.bind("<<ComboboxSelected>>", self._on_banco_seleccionado)
+
         self._build_warning_box(left_frame)
 # Botón para Extractos
         self.btn_extractos = ttk.Button(
@@ -253,6 +289,7 @@ class PDFViewerApp:
             command=lambda: self.cargar_y_procesar_pdf("Extracto"),
             style="Primary.TButton",
             cursor="hand2",
+            state=tk.DISABLED,
         )
         self.btn_extractos.pack(fill=tk.X, pady=6)
 
@@ -263,6 +300,7 @@ class PDFViewerApp:
             command=lambda: self.cargar_y_procesar_pdf("MovimientosPNatural"),
             style="Primary.TButton",
             cursor="hand2",
+            state=tk.DISABLED,
         )
         self.btn_movimientos_pn.pack(fill=tk.X, pady=6)
 
@@ -273,25 +311,37 @@ class PDFViewerApp:
             command=lambda: self.cargar_y_procesar_pdf("MovimientoSOC"),
             style="Primary.TButton",
             cursor="hand2",
+            state=tk.DISABLED,
         )
         self.btn_movimientos_soc.pack(fill=tk.X, pady=6)
-        btn_load_excel = ttk.Button(
+        self.btn_load_excel = ttk.Button(
                 left_frame,
                 text="📊 Cargar Excel",
                 command=self.cargar_archivo_excel,  # <--- Vinculación agregada
                 style="Primary.TButton",
                 cursor="hand2",
+                state=tk.DISABLED,
             )
-        btn_load_excel.pack(fill=tk.X, pady=6)
+        self.btn_load_excel.pack(fill=tk.X, pady=6)
 
-        btn_editarbancarios = ttk.Button(
+        self.btn_editarbancarios = ttk.Button(
             left_frame,
             text="✏️ Editar Bancarios",
             command=lambda: self.abrir_clasificador(),  # <--- Usamos un método intermediario o lambda
             style="Primary.TButton",
             cursor="hand2",
+            state=tk.DISABLED,
         )
-        btn_editarbancarios.pack(fill=tk.X, pady=6)
+        self.btn_editarbancarios.pack(fill=tk.X, pady=6)
+
+        # Botones cuya disponibilidad depende del banco elegido arriba.
+        self.botones_dependientes_banco = [
+            self.btn_extractos,
+            self.btn_movimientos_pn,
+            self.btn_movimientos_soc,
+            self.btn_load_excel,
+            self.btn_editarbancarios,
+        ]
 
 # Crear el botón "Limpiar / Nuevo Documento"
         self.btn_limpiar = tk.Button(
@@ -399,11 +449,33 @@ class PDFViewerApp:
 
         self.notebook_hojas = ttk.Notebook(self.tab_excel)
         self.notebook_hojas.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-    
+
+        # Estado inicial: nada habilitado hasta elegir un banco.
+        self._on_banco_seleccionado()
 
         # ------------------------------------------------------------------
     # Lógica y Eventos
     # ------------------------------------------------------------------
+
+    def _on_banco_seleccionado(self, event=None):
+        """Habilita/deshabilita los botones de carga según el banco elegido.
+
+        - Sin selección: todo deshabilitado.
+        - Bancolombia: todos los botones disponibles.
+        - Banco de Bogotá: únicamente "Cargar Extracto".
+        """
+        seleccion = self.combo_bancos.get()
+
+        if seleccion.startswith("Bancolombia"):
+            for btn in self.botones_dependientes_banco:
+                btn.config(state=tk.NORMAL)
+        elif seleccion.startswith("Banco de Bogotá"):
+            for btn in self.botones_dependientes_banco:
+                btn.config(state=tk.DISABLED)
+            self.btn_extractos.config(state=tk.NORMAL)
+        else:
+            for btn in self.botones_dependientes_banco:
+                btn.config(state=tk.DISABLED)
 
     def abrir_clasificador(self):
         # Verificamos si ya hay un Excel generado y cargado en el sistema
@@ -621,10 +693,24 @@ class PDFViewerApp:
             messagebox.showwarning("Atención", "Carga un archivo PDF primero.")
             return
 
-        if ejecutar_proceso_exportacion is None:
+        # Determinar el backend según lo que el usuario eligió en el combo,
+        # en vez de invocar siempre el de Banco de Bogotá.
+        banco_seleccionado = (
+            self.combo_bancos.get() if hasattr(self, "combo_bancos") else ""
+        )
+        usa_bogota = banco_seleccionado.startswith("Banco de Bogotá")
+
+        if usa_bogota and exportar_bogota is None:
             messagebox.showerror(
                 "Error de Módulo",
-                f"No se pudo importar el script de backend:\n{_import_error_msg}",
+                f"No se pudo importar el script de Banco de Bogotá:\n{_import_error_msg}",
+            )
+            return
+
+        if not usa_bogota and ejecutar_proceso_exportacion is None:
+            messagebox.showerror(
+                "Error de Módulo",
+                f"No se pudo importar el script de Bancolombia:\n{_import_error_msg}",
             )
             return
 
@@ -676,9 +762,18 @@ class PDFViewerApp:
         self.root.update_idletasks()
 
         try:
-            excel_generado = ejecutar_proceso_exportacion(
-                self.pdf_engine.current_path, output_excel_path=save_path
-            )
+            # --- SELECCIÓN DEL BACKEND SEGÚN EL COMBO ---
+            if usa_bogota:
+                excel_generado = exportar_bogota(
+                    self.pdf_engine.current_path, output_excel_path=save_path
+                )
+            else:
+                excel_generado = ejecutar_proceso_exportacion(
+                    self.pdf_engine.current_path, output_excel_path=save_path
+                )
+
+            if not excel_generado:
+                raise ValueError("No se obtuvieron registros del documento procesado.")
 
             self.pdf_engine.last_excel_path = excel_generado
 
@@ -693,6 +788,8 @@ class PDFViewerApp:
                 ),
                 style="Status.TLabel",
             )
+            
+            # Apertura del clasificador visual y actualización en GUI
             ClasificadorConceptos(self.root, excel_generado, self.cargar_excel_en_gui)
             self.cargar_excel_en_gui(excel_generado)
 
@@ -712,8 +809,6 @@ class PDFViewerApp:
             )
         finally:
             self.root.config(cursor="")
-
-   
 
     def cargar_excel_en_gui(self, excel_path):
         if not excel_path or not os.path.exists(excel_path):

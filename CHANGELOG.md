@@ -5,6 +5,17 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [1.5.8] - 2026-08-12
+### Añadido
+- Nuevo módulo `script_ban_bogota.py` diseñado para la extracción y procesamiento de extractos en PDF de **Banco de Bogotá (Extractos PyME)**.
+- Selector desplegable ("Selecciona tu banco") en la interfaz gráfica (`app_gui.py`) para dar soporte a múltiples bancos de forma estructurada.
+- Habilitación dinámica de botones y lógica en la GUI según el banco seleccionado (actualmente limitando a carga de extractos para Banco de Bogotá).
+- Integración de los flujos de procesamiento y exportación de archivos tanto para Bancolombia como para Banco de Bogotá en la aplicación gráfica.
+
+### Modificado
+- Actualizada la advertencia de bancos soportados en la interfaz de usuario para incluir al Banco de Bogotá.
+- Actualizada la versión global del programa a `1.5.8` en `version.py`.
+
 ## [1.1.8] - 2026-08-11
 ### Añadido
 

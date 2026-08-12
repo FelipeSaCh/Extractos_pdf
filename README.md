@@ -1,6 +1,6 @@
 # Extractor de excel para informacion bancaria
 
-Este proyecto nace con la finalidad de automatizar y optimizar la extracción de transacciones desde extractos bancarios en formato PDF, convirtiéndolos en formatos estructurados como Excel (`.xlsx`) y texto plano delimitado (`.txt`). En esta primera versión, la herramienta está personalizada y optimizada específicamente para los extractos de **Bancolombia**.
+Este proyecto nace con la finalidad de automatizar y optimizar la extracción de transacciones desde extractos bancarios en formato PDF, convirtiéndolos en formatos estructurados como Excel (`.xlsx`) y texto plano delimitado (`.txt`). Actualmente, la herramienta es compatible con extractos de **Bancolombia** y **Banco de Bogotá (Extractos PyME)**.
 
 ---
 
@@ -23,13 +23,14 @@ Para solucionar estos problemas y evitar el re-proceso de solicitar constantemen
 
 La herramienta consta de una interfaz gráfica de escritorio (GUI) interactiva que guía al usuario a través del siguiente flujo de trabajo:
 
-1. **Carga del PDF:** El usuario selecciona el archivo del extracto en formato PDF. La aplicación procesa internamente el documento y muestra una **vista previa visual** en tiempo real de las páginas en el panel derecho.
-2. **Extracción y Conversión:**
-   - La aplicación analiza espacialmente el contenido de cada página (coordenadas de texto) utilizando algoritmos de reconocimiento de columnas.
+1. **Selección del Banco:** El usuario selecciona el banco emisor del extracto mediante el menú desplegable ("Bancolombia (Estándar)" o "Banco de Bogotá (Extractos PyME)"). Los controles de la aplicación se habilitarán dinámicamente de acuerdo con el soporte del banco seleccionado.
+2. **Carga del PDF:** El usuario selecciona el archivo del extracto en formato PDF. La aplicación procesa internamente el documento y muestra una **vista previa visual** en tiempo real de las páginas en el panel derecho.
+3. **Extracción y Conversión:**
+   - La aplicación analiza espacialmente el contenido de cada página (coordenadas de texto) utilizando algoritmos de reconocimiento de columnas y posiciones relativas específicas de cada banco.
    - Genera un archivo **plano de texto** (`*_plano.txt`) con los campos delimitados por el carácter especial `|||`.
-   - Genera una **hoja de cálculo de Excel** (`*_convertido.xlsx`) con las columnas estructuradas: `FECHA`, `DESCRIPCIÓN`, `SUCURSAL`, `DCTO.`, `VALOR` y `SALDO`.
-3. **Reorganización Inteligente (Opcional):** Permite, mediante un botón, reordenar el Excel de forma que todos los movimientos con montos negativos (gastos/débitos) se posicionen en la parte superior para facilitar auditorías de flujo de caja y revisión de egresos de forma rápida.
-4. **Visualización Directa:** Con el botón *Abrir Excel*, el usuario puede lanzar el archivo generado directamente en el software de hojas de cálculo predeterminado del sistema operativo (por ejemplo, Microsoft Excel o LibreOffice).
+   - Genera una **hoja de cálculo de Excel (`.xlsx`)** estructurada con las columnas correspondientes del banco procesado (e.g. `FECHA`, `DESCRIPCIÓN`, `SUCURSAL`, `DCTO.`, `VALOR` y `SALDO` para Bancolombia, o `FECHA`, `COD TRANS`, `DESCRIPCIÓN`, `CIUDAD`, `OFICINA/CANAL`, `DOCUMENTO`, `VALOR`, `SALDO` para Banco de Bogotá).
+4. **Reorganización Inteligente e Informe:** Adicionalmente, el sistema genera de forma automática pestañas suplementarias de **Resumen** (conciliación de saldo anterior, saldo actual, abonos y cargos) y **Conceptos** (agrupaciones automáticas de movimientos por mes y descripción con totales generales).
+5. **Visualización Directa:** Con la interfaz visual, el usuario puede lanzar y clasificar conceptos directamente o utilizar *Abrir Excel* para ver el archivo final en el software de hojas de cálculo predeterminado (por ejemplo, Microsoft Excel).
 
 ---
 
@@ -37,9 +38,12 @@ La herramienta consta de una interfaz gráfica de escritorio (GUI) interactiva q
 
 La solución está desarrollada bajo una estructura modular en **Python 3**:
 
-* **`app_gui.py`**: Interfaz gráfica creada con `tkinter` (el framework estándar de GUI para Python). Maneja los eventos de usuario, diálogos de selección de archivos y la representación visual de las páginas del PDF.
-* **`pdf_engine.py`**: Motor encargado de la manipulación visual del PDF. Utiliza `PyMuPDF` (`fitz`) para renderizar las páginas a objetos de imagen compatibles con Tkinter.
-* **`script.py`**: Núcleo del procesamiento y lógica de negocio. Utiliza `pdfplumber` para leer la posición geométrica exacta de cada palabra en el PDF y agruparlas en filas y columnas basadas en umbrales de posición (`x0` y `x1`), reduciendo al mínimo los errores de salto de línea típicos de extractos con diseños complejos.
+* **`app_gui.py`**: Interfaz gráfica creada con `tkinter`. Controla la selección de banco, la interacción del usuario y hospeda los componentes visuales para visualización de PDF e informes.
+* **`pdf_engine.py`**: Motor encargado de renderizar y manipular las páginas del PDF visualmente con `PyMuPDF` (`fitz`).
+* **`script.py`**: Procesador de extractos de **Bancolombia** mediante lectura geométrica con `pdfplumber` y segmentación espacial de columnas.
+* **`script_ban_bogota.py`**: Procesador específico para extractos de **Banco de Bogotá (PyME)**, empleando anclaje dinámico por fechas y coordenadas optimizadas.
+* **`clasificador_conceptos.py`**: Módulo interactivo que permite clasificar contablemente los movimientos directamente desde la GUI del Excel generado.
+* **`parser_excel.py`**: Lector de archivos de Excel procesados para su integración y visualización en el panel del programa.
 * **`requirements.txt`**: Lista de dependencias del proyecto.
 
 ---
@@ -81,7 +85,7 @@ Una vez abierta la interfaz:
 
 Este proyecto adopta **Semantic Versioning (SemVer)** para gestionar las versiones del programa de forma ordenada y siguiendo las mejores prácticas de la industria.
 
-* **Versión Actual:** `v1.1.8`
+* **Versión Actual:** `v1.5.8`
 * **Historial de Cambios:** Todos los cambios detallados de cada versión se encuentran en el archivo [CHANGELOG.md](file:///c:/Users/USUARIO/Desktop/Proyectos/extractos_pdf/CHANGELOG.md).
 
 ### 📦 Compilación a Ejecutable (.exe)
