@@ -5,6 +5,12 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [2.1.0] - 2026-08-19
+### Añadido
+- Soporte para procesamiento de extractos de nequi. 
+### Modificado
+- Actualización de la versión global a `2.1.0` en `version.py`.
+
 ## [2.0.0] - 2026-08-19
 ### Añadido
 - Soporte para procesar archivos PDF protegidos con contraseña, solicitándola dinámicamente mediante una ventana de diálogo en la GUI.

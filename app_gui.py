@@ -28,9 +28,16 @@ except Exception as e:
     _import_error_msg = str(e)
 
 try:
-    from script import ejecutar_proceso_exportacion, reorganizar_excel
+    from script_nequi import ejecutar_proceso_exportacion as exportar_nequi
+    _import_error_msg = None
+except Exception as e:
+    exportar_nequi = None
+    _import_error_msg = str(e)
+
+try:
+    from script import ejecutar_proceso_exportacion as exportar_bancolombia, reorganizar_excel
 except ImportError as err:
-    ejecutar_proceso_exportacion = None
+    exportar_bancolombia = None
     reorganizar_excel = None
     _import_error_msg = str(err)
 
@@ -139,6 +146,7 @@ class PDFViewerApp:
                 "-- Selecciona un banco --",
                 "Bancolombia (Estándar)",
                 "Banco de Bogotá (Extractos PyME)",
+                "Nequi"
             ],
             state="readonly",
             font=("Segoe UI", 10),
@@ -418,6 +426,10 @@ class PDFViewerApp:
             for btn in self.botones_dependientes_banco:
                 btn.config(state=tk.DISABLED)
             self.btn_extractos.config(state=tk.NORMAL)
+        elif seleccion.startswith("Nequi"):
+            for btn in self.botones_dependientes_banco:
+                btn.config(state=tk.DISABLED)
+            self.btn_extractos.config(state=tk.NORMAL)
         else:
             for btn in self.botones_dependientes_banco:
                 btn.config(state=tk.DISABLED)
@@ -686,6 +698,8 @@ class PDFViewerApp:
             self.combo_bancos.get() if hasattr(self, "combo_bancos") else ""
         )
         usa_bogota = banco_seleccionado.startswith("Banco de Bogotá")
+        usa_nequi = banco_seleccionado.startswith("Nequi")
+        usa_bancolombia = banco_seleccionado.startswith("Bancolombia")
 
         if usa_bogota and exportar_bogota is None:
             messagebox.showerror(
@@ -694,7 +708,14 @@ class PDFViewerApp:
             )
             return
 
-        if not usa_bogota and ejecutar_proceso_exportacion is None:
+        elif usa_nequi and exportar_nequi is None:
+            messagebox.showerror(
+                "Error de Módulo",
+                f"No se pudo importar el script de Nequi:\n{_import_error_msg}",
+            )
+            return
+
+        elif usa_bancolombia and exportar_bancolombia is None:
             messagebox.showerror(
                 "Error de Módulo",
                 f"No se pudo importar el script de Bancolombia:\n{_import_error_msg}",
@@ -769,8 +790,14 @@ class PDFViewerApp:
                     output_excel_path=save_path,
                     progreso_callback=callback,
                 )
-            else:
-                excel_generado = ejecutar_proceso_exportacion(
+            elif usa_nequi:
+                excel_generado = exportar_nequi(
+                    pdf_path,
+                    output_excel_path=save_path,
+                    progreso_callback=callback,
+                )
+            elif usa_bancolombia:
+                excel_generado = exportar_bancolombia(
                     pdf_path,
                     output_excel_path=save_path,
                     progreso_callback=callback,
