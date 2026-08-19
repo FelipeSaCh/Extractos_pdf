@@ -38,12 +38,14 @@ La herramienta consta de una interfaz gráfica de escritorio (GUI) interactiva q
 
 La solución está desarrollada bajo una estructura modular en **Python 3**:
 
-* **`app_gui.py`**: Interfaz gráfica creada con `tkinter`. Controla la selección de banco, la interacción del usuario y hospeda los componentes visuales para visualización de PDF e informes.
-* **`pdf_engine.py`**: Motor encargado de renderizar y manipular las páginas del PDF visualmente con `PyMuPDF` (`fitz`).
+* **`app_gui.py`**: Interfaz gráfica creada con `tkinter`. Controla la selección de banco, la interacción del usuario y hospeda los componentes visuales. Incorpora hilos secundarios (`worker_manager.py`) para evitar el bloqueo del hilo principal al procesar y renderizar PDFs.
+* **`pdf_engine.py`**: Motor encargado de renderizar y manipular las páginas del PDF visualmente con `PyMuPDF` (`fitz`), incluyendo soporte para descifrar archivos protegidos por contraseña.
 * **`script.py`**: Procesador de extractos de **Bancolombia** mediante lectura geométrica con `pdfplumber` y segmentación espacial de columnas.
 * **`script_ban_bogota.py`**: Procesador específico para extractos de **Banco de Bogotá (PyME)**, empleando anclaje dinámico por fechas y coordenadas optimizadas.
 * **`clasificador_conceptos.py`**: Módulo interactivo que permite clasificar contablemente los movimientos directamente desde la GUI del Excel generado.
 * **`parser_excel.py`**: Lector de archivos de Excel procesados para su integración y visualización en el panel del programa.
+* **`ui_theme.py`**: Centraliza el estilo visual de la interfaz gráfica (colores, fuentes y elementos comunes como el cuadro de advertencias).
+* **`worker_manager.py`**: Administrador de hilos secundarios en segundo plano para Tkinter, evitando que la aplicación quede "No responde".
 * **`requirements.txt`**: Lista de dependencias del proyecto.
 
 ---
@@ -85,7 +87,7 @@ Una vez abierta la interfaz:
 
 Este proyecto adopta **Semantic Versioning (SemVer)** para gestionar las versiones del programa de forma ordenada y siguiendo las mejores prácticas de la industria.
 
-* **Versión Actual:** `v1.5.8`
+* **Versión Actual:** `v2.0.0`
 * **Historial de Cambios:** Todos los cambios detallados de cada versión se encuentran en el archivo [CHANGELOG.md](file:///c:/Users/USUARIO/Desktop/Proyectos/extractos_pdf/CHANGELOG.md).
 
 ### 📦 Compilación a Ejecutable (.exe)

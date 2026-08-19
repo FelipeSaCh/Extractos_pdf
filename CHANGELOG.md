@@ -5,6 +5,18 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [2.0.0] - 2026-08-19
+### Añadido
+- Soporte para procesar archivos PDF protegidos con contraseña, solicitándola dinámicamente mediante una ventana de diálogo en la GUI.
+- Procesamiento en segundo plano utilizando `worker_manager.py` para evitar que la interfaz gráfica se congele (no responsiva) durante la carga de PDFs grandes y la extracción de datos.
+- Módulo `ui_theme.py` que centraliza los estilos visuales, colores de la interfaz y componentes comunes como el cuadro de advertencias (Warning Box).
+- Barra de progreso que muestra el avance en tiempo real tanto del renderizado del PDF como de la exportación de movimientos.
+- Nuevo botón y funcionalidad de "Limpiar sesión" para liberar la memoria y desbloquear archivos abiertos en el sistema operativo.
+
+### Modificado
+- Refactorización de la lógica del motor en `pdf_engine.py` para separar renderizado de páginas e integrar callbacks de progreso de forma compatible con hilos secundarios.
+- Actualización de la versión global a `2.0.0` en `version.py`.
+
 ## [1.5.8] - 2026-08-12
 ### Añadido
 - Nuevo módulo `script_ban_bogota.py` diseñado para la extracción y procesamiento de extractos en PDF de **Banco de Bogotá (Extractos PyME)**.

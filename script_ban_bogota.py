@@ -1,7 +1,7 @@
+#script_ban_bogota.py
 import os
 import re
 import sys
-import openpyxl
 import pandas as pd
 import pdfplumber
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -91,12 +91,14 @@ def texto_delimitado_a_excel(lineas_texto, columnas, output_excel_path):
 # ==============================================================================
 
 
-def extraer_lineas_extractos_pyme(pdf_path):
+def extraer_lineas_extractos_pyme(pdf_path, progreso_callback=None):
     patron_fecha = r"^\b\d{1,2}/\d{2}\b"
     lineas_delimitadas = []
 
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
+        total_paginas = len(pdf.pages)
+
+        for indice_pagina, page in enumerate(pdf.pages, start=1):
             anc = page.width
             alt = page.height
 
@@ -112,6 +114,8 @@ def extraer_lineas_extractos_pyme(pdf_path):
                 if x_min_tabla <= w["x0"] <= x_max_tabla
             ]
             if not words:
+                if progreso_callback:
+                    progreso_callback(indice_pagina, total_paginas)
                 continue
 
             # Columnas basadas en X relativas dentro del área útil
@@ -153,6 +157,8 @@ def extraer_lineas_extractos_pyme(pdf_path):
                     )
 
             if not fechas_anclaje:
+                if progreso_callback:
+                    progreso_callback(indice_pagina, total_paginas)
                 continue
 
             # 4. PROCESAR CADA BLOQUE DE FECHA
@@ -240,6 +246,9 @@ def extraer_lineas_extractos_pyme(pdf_path):
                     tx_actual["SALDO"],
                 ]
                 lineas_delimitadas.append(DELIMITADOR.join(registro))
+
+            if progreso_callback:
+                progreso_callback(indice_pagina, total_paginas)
 
     return lineas_delimitadas
 
@@ -424,7 +433,7 @@ def reorganizar_excel(excel_path):
 # ==============================================================================
 
 
-def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
+def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_callback=None):
     """Procesa el extracto de Banco de Bogotá directamente sin exigir palabras fijas en el nombre."""
     columnas = [
         "FECHA",
@@ -437,7 +446,7 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
         "SALDO",
     ]
 
-    lineas_plana = extraer_lineas_extractos_pyme(pdf_path)
+    lineas_plana = extraer_lineas_extractos_pyme(pdf_path, progreso_callback)
 
     if not lineas_plana:
         raise ValueError("No se pudieron extraer movimientos del PDF.")

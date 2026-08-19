@@ -1,6 +1,8 @@
+#script_ban_bogota.py
 import os
 import re
 import sys
+import openpyxl
 import pandas as pd
 import pdfplumber
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -34,7 +36,15 @@ _PATRON_NUM_TOKEN = re.compile(r"^\d+$")
 
 
 def limpiar_pie_pagina(words_fila):
-    """Elimina la secuencia 'Página N de M' (o variantes) sin importar si comparte fila con datos reales."""
+    """Elimina 'Página N de M' y avisos legales de pie de página."""
+    linea_texto = " ".join([w["text"] for w in words_fila]).upper()
+    if (
+        "NOTIFICAR CUALQUIER REPARO" in linea_texto
+        or "REVISORÍA FISCAL" in linea_texto
+        or "VALOR PENDIENTE POR APLICAR" in linea_texto
+    ):
+        return []
+
     n = len(words_fila)
     idx_a_quitar = set()
     i = 0
@@ -59,6 +69,7 @@ def limpiar_pie_pagina(words_fila):
             i = j
         else:
             i += 1
+
     if not idx_a_quitar:
         return words_fila
     return [w for k, w in enumerate(words_fila) if k not in idx_a_quitar]
@@ -77,355 +88,170 @@ def texto_delimitado_a_excel(lineas_texto, columnas, output_excel_path):
 
 
 # ==============================================================================
-# PARSER 1: MOVIMIENTOS SOCIEDAD
+# PARSER EXTRACCIÓN MILIMÉTRICA BANCO DE BOGOTÁ
 # ==============================================================================
 
 
-def extraer_lineas_movimientos_soc(pdf_path):
-    """Extrae transacciones para Movimientos Sociedad (7 columnas)."""
-    patron_fecha = r"^\b(?:\d{4}/\d{2}/\d{2}|\d{1,2}/\d{2}(?:/\d{2,4})?)\b"
+def extraer_lineas_extractos_pyme(pdf_path, progreso_callback=None):
+    patron_fecha = r"^\b\d{1,2}/\d{2}\b"
     lineas_delimitadas = []
 
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            words = page.extract_words()
+        total_paginas = len(pdf.pages)
+
+        for indice_pagina, page in enumerate(pdf.pages, start=1):
+            anc = page.width
+            alt = page.height
+
+            # 1. DELIMITACIÓN ESTRICTA DEL ÁREA ÚTIL (Crop Zone)
+            # Ignora el margen izquierdo (texto vertical) y los márgenes exterior/pie
+            x_min_tabla = anc * 0.05  # Deja por fuera "VIGILADO..."
+            x_max_tabla = anc * 0.98
+
+            # Filtrar palabras dentro de los márgenes horizontales de la tabla
+            words = [
+                w
+                for w in page.extract_words()
+                if x_min_tabla <= w["x0"] <= x_max_tabla
+            ]
             if not words:
+                if progreso_callback:
+                    progreso_callback(indice_pagina, total_paginas)
                 continue
 
-            anc_pagina = page.width
-            x_max_desc = anc_pagina * 0.35
-            x_max_sucursal = anc_pagina * 0.50
-            x_max_ref1 = anc_pagina * 0.63
-            x_max_ref2 = anc_pagina * 0.73
-            x_max_doc = anc_pagina * 0.85
+            # Columnas basadas en X relativas dentro del área útil
+            x_fecha_max = anc * 0.11
+            x_cod_max = anc * 0.16
+            x_desc_max = anc * 0.43
+            x_ciudad_max = anc * 0.53
+            x_oficina_max = anc * 0.67
+            x_doc_max = anc * 0.74
+            x_valor_max = anc * 0.88
 
-            filas_y = {}
-            for w in words:
-                y_key = round(w["top"] / 3.0) * 3.0
-                filas_y.setdefault(y_key, []).append(w)
+            # 2. ENCONTRAR LÍMITE INFERIOR (Corte antes del pie de página)
+            y_max_tabla = alt
+            for w in sorted(words, key=lambda x: x["top"]):
+                txt_upper = w["text"].upper()
+                if (
+                    "FIN MOVIMIENTOS" in txt_upper
+                    or "NOTIFICAR" in txt_upper
+                    or "REVISORÍA" in txt_upper
+                ):
+                    y_max_tabla = w["top"] - 2
+                    break
 
-            transacciones_pagina = []
-            tx_actual = None
-
-            for y_key in sorted(filas_y.keys()):
-                words_brutas = sorted(filas_y[y_key], key=lambda x: x["x0"])
-                words_linea = limpiar_pie_pagina(words_brutas)
-
-                if not words_linea:
+            # 3. ANCLAJE POR FECHAS (Columna 1 real)
+            fechas_anclaje = []
+            for w in sorted(words, key=lambda x: (x["top"], x["x0"])):
+                if w["top"] >= y_max_tabla:
                     continue
 
-                primera_word = words_linea[0]
-                texto_primera = primera_word["text"].strip()
+                txt = w["text"].strip()
+                # La fecha debe estar en la primera columna
+                if w["x0"] < x_fecha_max and re.match(patron_fecha, txt):
+                    fechas_anclaje.append(
+                        {
+                            "fecha": txt,
+                            "top": w["top"],
+                            "word_obj": w,
+                        }
+                    )
 
-                es_inicio_tx = bool(
-                    re.match(patron_fecha, texto_primera)
-                    and primera_word["x0"] < (anc_pagina * 0.20)
+            if not fechas_anclaje:
+                if progreso_callback:
+                    progreso_callback(indice_pagina, total_paginas)
+                continue
+
+            # 4. PROCESAR CADA BLOQUE DE FECHA
+            for i in range(len(fechas_anclaje)):
+                f_actual = fechas_anclaje[i]
+                y_inicio = f_actual["top"] - 1.5
+
+                if i + 1 < len(fechas_anclaje):
+                    y_fin = fechas_anclaje[i + 1]["top"] - 1.5
+                else:
+                    y_fin = y_max_tabla
+
+                # Palabras dentro del bloque vertical Y y de la tabla X
+                palabras_bloque = [
+                    w
+                    for w in words
+                    if y_inicio <= w["top"] < y_fin and w["top"] < y_max_tabla
+                ]
+
+                tx_actual = {
+                    "FECHA": f_actual["fecha"],
+                    "COD_TRANS": [],
+                    "DESCRIPCIÓN": [],
+                    "CIUDAD": [],
+                    "OFICINA": [],
+                    "DOCUMENTO": [],
+                    "VALOR": "",
+                    "SALDO": "",
+                }
+
+                palabras_ordenadas = sorted(
+                    palabras_bloque,
+                    key=lambda w: (round(w["top"] / 2.0) * 2.0, w["x0"]),
                 )
 
-                if es_inicio_tx:
-                    if tx_actual:
-                        transacciones_pagina.append(tx_actual)
-
-                    tx_actual = {
-                        "FECHA": texto_primera,
-                        "DESCRIPCIÓN": [],
-                        "SUCURSAL/CANAL": [],
-                        "REFERENCIA 1": [],
-                        "REFERENCIA 2": [],
-                        "DOCUMENTO": [],
-                        "VALOR": "",
-                    }
-                    words_a_procesar = words_linea[1:]
-                else:
-                    if not tx_actual:
+                for w in palabras_ordenadas:
+                    txt = w["text"].strip()
+                    if not txt or set(txt) == {"-"}:
                         continue
-                    words_a_procesar = words_linea
 
-                for w in words_a_procesar:
-                    x_centro = (w["x0"] + w["x1"]) / 2.0
-                    txt_w = w["text"]
+                    if w == f_actual["word_obj"]:
+                        continue
 
-                    if x_centro < x_max_desc:
-                        tx_actual["DESCRIPCIÓN"].append(txt_w)
-                    elif x_centro < x_max_sucursal:
-                        tx_actual["SUCURSAL/CANAL"].append(txt_w)
-                    elif x_centro < x_max_ref1:
-                        tx_actual["REFERENCIA 1"].append(txt_w)
-                    elif x_centro < x_max_ref2:
-                        tx_actual["REFERENCIA 2"].append(txt_w)
-                    elif x_centro < x_max_doc:
-                        tx_actual["DOCUMENTO"].append(txt_w)
+                    x_mid = (w["x0"] + w["x1"]) / 2.0
+
+                    if x_mid < x_cod_max:
+                        tx_actual["COD_TRANS"].append(txt)
+                    elif x_mid < x_desc_max:
+                        tx_actual["DESCRIPCIÓN"].append(txt)
+                    elif x_mid < x_ciudad_max:
+                        tx_actual["CIUDAD"].append(txt)
+                    elif x_mid < x_oficina_max:
+                        tx_actual["OFICINA"].append(txt)
+                    elif x_mid < x_doc_max:
+                        tx_actual["DOCUMENTO"].append(txt)
+                    elif x_mid < x_valor_max:
+                        if (
+                            es_numero_financiero(txt)
+                            and not tx_actual["VALOR"]
+                        ):
+                            tx_actual["VALOR"] = txt
                     else:
-                        if es_numero_financiero(txt_w):
-                            tx_actual["VALOR"] = txt_w
+                        if (
+                            es_numero_financiero(txt)
+                            and not tx_actual["SALDO"]
+                        ):
+                            tx_actual["SALDO"] = txt
 
-            if tx_actual:
-                transacciones_pagina.append(tx_actual)
-
-            for tx in transacciones_pagina:
-                desc_str = " ".join(tx["DESCRIPCIÓN"]).strip()
-                suc_str = " ".join(tx["SUCURSAL/CANAL"]).strip()
-                ref1_str = " ".join(tx["REFERENCIA 1"]).strip()
-                ref2_str = " ".join(tx["REFERENCIA 2"]).strip()
-                doc_str = " ".join(tx["DOCUMENTO"]).strip()
+                desc = " ".join(tx_actual["DESCRIPCIÓN"]).strip()
 
                 if (
-                    "DESCRIPC" in desc_str.upper()
-                    or "REFERENCIA" in ref1_str.upper()
+                    "DESCRIPCI" in desc.upper()
+                    or "FECHA" in tx_actual["FECHA"].upper()
                 ):
                     continue
 
                 registro = [
-                    tx["FECHA"],
-                    desc_str,
-                    suc_str,
-                    ref1_str,
-                    ref2_str,
-                    doc_str,
-                    tx["VALOR"],
+                    tx_actual["FECHA"],
+                    " ".join(tx_actual["COD_TRANS"]).strip(),
+                    desc,
+                    " ".join(tx_actual["CIUDAD"]).strip(),
+                    " ".join(tx_actual["OFICINA"]).strip(),
+                    " ".join(tx_actual["DOCUMENTO"]).strip(),
+                    tx_actual["VALOR"],
+                    tx_actual["SALDO"],
                 ]
                 lineas_delimitadas.append(DELIMITADOR.join(registro))
 
-    return lineas_delimitadas
-
-
-# ==============================================================================
-# PARSER 2: MOVIMIENTOS PERSONA NATURAL
-# ==============================================================================
-
-def extraer_lineas_movimientos_pn(pdf_path):
-    """Extrae transacciones para Movimientos Persona Natural de Bancolombia.
-
-    Corrige la captura del año completo (evitando '202') y descarta metadatos de
-    pie de página como 'Dirección IP'.
-    """
-    patron_fecha_pn = r"^\d{1,2}\s+(?:ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\.?(?:\s+\d{4})?"
-    lineas_delimitadas = []
-
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            words = page.extract_words()
-            if not words:
-                continue
-
-            anc_pagina = page.width
-
-            x_limite_desc = anc_pagina * 0.50
-            x_limite_ref = anc_pagina * 0.76
-
-            filas_y = {}
-            for w in words:
-                y_key = round(w["top"] / 3.0) * 3.0
-                filas_y.setdefault(y_key, []).append(w)
-
-            transacciones_pagina = []
-            tx_actual = None
-
-            for y_key in sorted(filas_y.keys()):
-                words_brutas = sorted(filas_y[y_key], key=lambda x: x["x0"])
-                words_linea = limpiar_pie_pagina(words_brutas)
-
-                if not words_linea:
-                    continue
-
-                # --- 1. FILTRADO DE 'DIRECCIÓN IP' ---
-                # Si la línea contiene metadatos de pie de página, los removemos antes de clasificar
-                words_filtradas = []
-                ignorar_siguientes = False
-                for idx, w in enumerate(words_linea):
-                    txt_clean = w["text"].strip().lower()
-                    
-                    # Detectar si inicia "Dirección IP"
-                    if "direcci" in txt_clean or txt_clean == "ip" or "181.137" in txt_clean:
-                        continue
-                    words_filtradas.append(w)
-
-                words_linea = words_filtradas
-                if not words_linea:
-                    continue
-
-                # --- 2. CAPTURA Y VALIDACIÓN DE FECHA ---
-                texto_linea_inicio = " ".join([w["text"] for w in words_linea[:4]])
-                coincidencia_fecha = re.match(
-                    patron_fecha_pn, texto_linea_inicio, re.IGNORECASE
-                )
-
-                es_inicio_tx = bool(
-                    coincidencia_fecha
-                    and words_linea[0]["x0"] < (anc_pagina * 0.25)
-                )
-
-                if es_inicio_tx:
-                    if tx_actual:
-                        transacciones_pagina.append(tx_actual)
-
-                    fecha_str = coincidencia_fecha.group(0).strip()
-                    num_words_fecha = len(fecha_str.split())
-
-                    # Asegurar año de 4 dígitos si está presente inmediatamente después
-                    if num_words_fecha < len(words_linea):
-                        posible_anio = words_linea[num_words_fecha]["text"].strip()
-                        if re.match(r"^\d{4}$", posible_anio):
-                            fecha_str = f"{' '.join(fecha_str.split()[:2])} {posible_anio}"
-                            num_words_fecha += 1
-
-                    tx_actual = {
-                        "FECHA": fecha_str,
-                        "DESCRIPCIÓN": [],
-                        "REFERENCIA": [],
-                        "VALOR_RAW": [],
-                    }
-                    words_a_procesar = words_linea[num_words_fecha:]
-                else:
-                    if not tx_actual:
-                        continue
-                    words_a_procesar = words_linea
-
-                # --- 3. CLASIFICACIÓN DE COLUMNAS POR COORDENADAS ---
-                for w in words_a_procesar:
-                    x_centro = (w["x0"] + w["x1"]) / 2.0
-                    txt_w = w["text"].strip()
-
-                    if not txt_w:
-                        continue
-
-                    if x_centro < x_limite_desc:
-                        tx_actual["DESCRIPCIÓN"].append(txt_w)
-                    elif x_centro < x_limite_ref:
-                        tx_actual["REFERENCIA"].append(txt_w)
-                    else:
-                        tx_actual["VALOR_RAW"].append(txt_w)
-
-            if tx_actual:
-                transacciones_pagina.append(tx_actual)
-
-            # --- 4. FORMATO FINAL Y LIMPIEZA DE VALORES ---
-            for tx in transacciones_pagina:
-                desc_str = " ".join(tx["DESCRIPCIÓN"]).strip()
-                ref_str = " ".join(tx["REFERENCIA"]).strip()
-                cadena_valor_bruta = "".join(tx["VALOR_RAW"]).strip()
-
-                if (
-                    "FECHA" in tx["FECHA"].upper()
-                    or "DESCRIPCI" in desc_str.upper()
-                ):
-                    continue
-
-                es_negativo = "-" in cadena_valor_bruta
-                solo_num_y_puntos = re.sub(r"[^\d\.,]", "", cadena_valor_bruta)
-
-                if "," in solo_num_y_puntos and "." in solo_num_y_puntos:
-                    solo_num_y_puntos = solo_num_y_puntos.replace(".", "").replace(",", ".")
-                elif "," in solo_num_y_puntos:
-                    solo_num_y_puntos = solo_num_y_puntos.replace(",", ".")
-
-                match_monto = re.search(r"\d+(?:\.\d+)?", solo_num_y_puntos)
-
-                if match_monto:
-                    monto_final = match_monto.group(0)
-                    if es_negativo:
-                        monto_final = f"-{monto_final}"
-                else:
-                    monto_final = "0"
-
-                registro = [tx["FECHA"], desc_str, ref_str, monto_final]
-                lineas_delimitadas.append(DELIMITADOR.join(registro))
+            if progreso_callback:
+                progreso_callback(indice_pagina, total_paginas)
 
     return lineas_delimitadas
-
-# ==============================================================================
-# PARSER 3: EXTRACTOS
-# ==============================================================================
-
-
-def extraer_lineas_extractos(pdf_path):
-    """Extrae las transacciones para archivos de tipo 'Extracto'."""
-    patron_fecha = r"^\b\d{1,2}/\d{2}(?:/\d{2,4})?\b"
-    lineas_delimitadas = []
-
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            words = page.extract_words()
-            if not words:
-                continue
-
-            anc_pagina = page.width
-            x_max_desc = anc_pagina * 0.40
-            x_max_sucursal = anc_pagina * 0.65
-
-            filas_y = {}
-            for w in words:
-                y_key = round(w["top"] / 2.5) * 2.5
-                filas_y.setdefault(y_key, []).append(w)
-
-            for y_key in sorted(filas_y.keys()):
-                words_ordenadas = sorted(filas_y[y_key], key=lambda x: x["x0"])
-                words_linea = limpiar_pie_pagina(words_ordenadas)
-
-                if not words_linea:
-                    continue
-
-                primera_word = words_linea[0]
-                texto_primera = primera_word["text"].strip()
-
-                if re.match(patron_fecha, texto_primera) and primera_word[
-                    "x0"
-                ] < (anc_pagina * 0.20):
-                    fecha_val = texto_primera
-                    resto_words = words_linea[1:]
-                    if not resto_words:
-                        continue
-
-                    saldo_val = ""
-                    valor_val = ""
-
-                    if len(resto_words) > 0 and es_numero_financiero(
-                        resto_words[-1]["text"]
-                    ):
-                        saldo_val = resto_words.pop(-1)["text"]
-
-                    if len(resto_words) > 0 and es_numero_financiero(
-                        resto_words[-1]["text"]
-                    ):
-                        valor_val = resto_words.pop(-1)["text"]
-
-                    descripcion_words = []
-                    sucursal_words = []
-                    dcto_words = []
-
-                    for w in resto_words:
-                        x_centro = (w["x0"] + w["x1"]) / 2.0
-                        txt_w = w["text"]
-
-                        if x_centro < x_max_desc:
-                            descripcion_words.append(txt_w)
-                        elif x_centro < x_max_sucursal:
-                            sucursal_words.append(txt_w)
-                        else:
-                            dcto_words.append(txt_w)
-
-                    descripcion_val = " ".join(descripcion_words).strip()
-                    sucursal_val = " ".join(sucursal_words).strip()
-                    dcto_val = " ".join(dcto_words).strip()
-
-                    if (
-                        "DESCRIPC" in descripcion_val.upper()
-                        or "RESUMEN" in descripcion_val.upper()
-                    ):
-                        continue
-
-                    registro = [
-                        fecha_val,
-                        descripcion_val,
-                        sucursal_val,
-                        dcto_val,
-                        valor_val,
-                        saldo_val,
-                    ]
-                    lineas_delimitadas.append(DELIMITADOR.join(registro))
-
-    return lineas_delimitadas
-
 
 # ==============================================================================
 # REORGANIZACIÓN Y GENERACIÓN DE REPORTES EN EXCEL
@@ -433,7 +259,7 @@ def extraer_lineas_extractos(pdf_path):
 
 
 def reorganizar_excel(excel_path):
-    """Calcula totales, conciliación y conceptos. La hoja 'Resumen' omite saldos si no aplican."""
+    """Calcula totales, conciliación y conceptos."""
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"No se encontró el archivo: {excel_path}")
 
@@ -493,19 +319,18 @@ def reorganizar_excel(excel_path):
 
     df_conciliacion = pd.DataFrame(filas_resumen)
 
-    # --- NUEVA LÓGICA DE EXTRACCIÓN DE MES ---
+    # EXTRAER MES
     df_calc = df.copy()
-    
-    # Extraer el mes convirtiendo a datetime de forma flexible
-    # Mantiene formato seguro incluso si las fechas son DD/MM o YYYY/MM/DD
-    fechas_dt = pd.to_datetime(df_calc["FECHA"], errors="coerce", dayfirst=True,format="mixed")
-    
-    # Si alguna fecha no fue parseada directamente (ej: '30/05'), intentamos extraera manualmente vía Regex
+    fechas_dt = pd.to_datetime(
+        df_calc["FECHA"], errors="coerce", dayfirst=True, format="mixed"
+    )
     meses_extraidos = fechas_dt.dt.month.fillna(
         df_calc["FECHA"].astype(str).str.extract(r"[/.-](\d{1,2})", expand=False)
     )
-    
-    df_calc["MES"] = pd.to_numeric(meses_extraidos, errors="coerce").fillna(0).astype(int)
+
+    df_calc["MES"] = (
+        pd.to_numeric(meses_extraidos, errors="coerce").fillna(0).astype(int)
+    )
     df_calc["_VALOR_NUM"] = valores_numericos
     df_calc["_CARGOS_TEMP"] = df_calc["_VALOR_NUM"].apply(
         lambda x: x if x < 0 else 0.0
@@ -514,7 +339,7 @@ def reorganizar_excel(excel_path):
         lambda x: x if x > 0 else 0.0
     )
 
-# Agrupar por MES y DESCRIPCIÓN
+    # Agrupar por MES y DESCRIPCIÓN
     df_grouped = (
         df_calc.groupby(["MES", col_desc], as_index=False)
         .agg(
@@ -525,11 +350,9 @@ def reorganizar_excel(excel_path):
         .sort_values(by=["MES", "CARGOS"], ascending=[True, True])
     )
 
-    # --- INSERCIÓN DE 3 FILAS EN BLANCO POR CAMBIO DE MES Y TOTAL ---
     filas_con_espacios = []
     meses_unicos = df_grouped["MES"].unique()
 
-    # Fila vacía base con la misma estructura
     fila_vacia = {
         "MES": "",
         col_desc: "",
@@ -539,18 +362,14 @@ def reorganizar_excel(excel_path):
     }
 
     for i, mes in enumerate(meses_unicos):
-        # Filtrar registros del mes actual
         df_mes = df_grouped[df_grouped["MES"] == mes]
         filas_con_espacios.extend(df_mes.to_dict("records"))
 
-        # Si no es el último grupo de meses, agregar 3 filas vacías
         if i < len(meses_unicos) - 1:
             filas_con_espacios.extend([fila_vacia.copy() for _ in range(3)])
 
-    # Agregar 3 filas en blanco antes del TOTAL GENERAL
     filas_con_espacios.extend([fila_vacia.copy() for _ in range(3)])
 
-    # Fila del Total General
     fila_total = {
         "MES": "",
         col_desc: "TOTAL GENERAL",
@@ -560,7 +379,6 @@ def reorganizar_excel(excel_path):
     }
     filas_con_espacios.append(fila_total)
 
-    # Crear el DataFrame final para la hoja Conceptos
     df_conceptos = pd.DataFrame(filas_con_espacios)
 
     # PASO 3: REORGANIZACIÓN VISUAL (Negativos arriba)
@@ -590,7 +408,9 @@ def reorganizar_excel(excel_path):
             worksheet = workbook[sheet_name]
 
             for col in worksheet.iter_cols(1, worksheet.max_column):
-                header_val = str(col[0].value).upper() if col[0].value else ""
+                header_val = (
+                    str(col[0].value).upper() if col[0].value else ""
+                )
 
                 if header_val in [
                     "VALOR",
@@ -614,48 +434,23 @@ def reorganizar_excel(excel_path):
 # ==============================================================================
 
 
-def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None):
-    """Detecta automáticamente el tipo de documento según el nombre del PDF."""
-    nombre_archivo = os.path.basename(pdf_path).upper()
+def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_callback=None):
+    """Procesa el extracto de Banco de Bogotá directamente sin exigir palabras fijas en el nombre."""
+    columnas = [
+        "FECHA",
+        "COD TRANS",
+        "DESCRIPCIÓN",
+        "CIUDAD",
+        "OFICINA/CANAL",
+        "DOCUMENTO",
+        "VALOR",
+        "SALDO",
+    ]
 
-    if "MOVIMENTOSPNATURAL" in nombre_archivo or "MOVIMIENTOSPNATURAL" in nombre_archivo:
-        tipo = "MOVIMIENTOS_PNATURAL"
-        columnas = ["FECHA", "DESCRIPCIÓN", "REFERENCIA", "VALOR"]
-        lineas_plana = extraer_lineas_movimientos_pn(pdf_path)
-
-    elif "MOVIMIENTOSOC" in nombre_archivo or "MOVIMIENTO" in nombre_archivo:
-        tipo = "MOVIMIENTOS_SOC"
-        columnas = [
-            "FECHA",
-            "DESCRIPCIÓN",
-            "SUCURSAL/CANAL",
-            "REFERENCIA 1",
-            "REFERENCIA 2",
-            "DOCUMENTO",
-            "VALOR",
-        ]
-        lineas_plana = extraer_lineas_movimientos_soc(pdf_path)
-
-    elif "EXTRACTO" in nombre_archivo:
-        tipo = "EXTRACTOS"
-        columnas = [
-            "FECHA",
-            "DESCRIPCIÓN",
-            "SUCURSAL",
-            "DCTO.",
-            "VALOR",
-            "SALDO",
-        ]
-        lineas_plana = extraer_lineas_extractos(pdf_path)
-
-    else:
-        raise ValueError(
-            "El nombre del archivo no coincide con un prefijo válido "
-            "('MovimientosPNatural', 'MovimientoSOC' o 'Extracto')."
-        )
+    lineas_plana = extraer_lineas_extractos_pyme(pdf_path, progreso_callback)
 
     if not lineas_plana:
-        return None
+        raise ValueError("No se pudieron extraer movimientos del PDF.")
 
     if not output_excel_path:
         base_path, _ = os.path.splitext(pdf_path)

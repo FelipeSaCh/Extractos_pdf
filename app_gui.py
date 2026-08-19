@@ -1,11 +1,24 @@
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, simpledialog
 import pandas as pd
-from pdf_engine import PDFEngine
+from pdf_engine import (
+    PDFEngine,
+    PDFPasswordRequiredError,
+    PDFInvalidPasswordError
+)
 from PIL import Image, ImageTk
 from version import __version__
-from clasificador_conceptos import ClasificadorConceptos 
+from clasificador_conceptos import ClasificadorConceptos
+from worker_manager import TrabajadorEnSegundoPlano
+from ui_theme import (
+    aplicar_estilos,
+    construir_warning_box,
+    COLOR_BG,
+    COLOR_CANVAS_BG,
+    FONT_BUTTON,
+)
+
 # Importación del backend de Banco de Bogotá
 try:
     from script_ban_bogota import ejecutar_proceso_exportacion as exportar_bogota
@@ -27,25 +40,6 @@ except ImportError as err:
     extraer_datos_desde_excel = None
     _import_parser_error_msg = str(err)
 
-# ------------------------------------------------------------------
-# Paleta y constantes visuales
-# ------------------------------------------------------------------
-COLOR_BG = "#F4F6F8"
-COLOR_SIDEBAR = "#FFFFFF"
-COLOR_PRIMARY = "#2F6FED"
-COLOR_PRIMARY_DARK = "#2457BE"
-COLOR_TEXT = "#1F2933"
-COLOR_MUTED = "#7B8794"
-COLOR_SUCCESS = "#2E7D32"
-COLOR_BORDER = "#E4E7EB"
-COLOR_CANVAS_BG = "#525659"
-
-FONT_TITLE = ("Segoe UI", 16, "bold")
-FONT_SUBTITLE = ("Segoe UI", 9)
-FONT_BUTTON = ("Segoe UI", 10)
-FONT_INFO = ("Segoe UI", 9)
-FONT_STATUS = ("Segoe UI", 9, "bold")
-
 
 class PDFViewerApp:
 
@@ -57,9 +51,13 @@ class PDFViewerApp:
         self.root.configure(bg=COLOR_BG)
 
         self.pdf_engine = PDFEngine()
+        self.trabajador = TrabajadorEnSegundoPlano(self.root)
+
+        # Mantiene vivas las referencias a los ImageTk.PhotoImage mostrados
+        self._photo_images = []
 
         self._center_window()
-        self._apply_styles()
+        aplicar_estilos(self.root)
         self._build_ui()
 
     def _center_window(self):
@@ -70,138 +68,6 @@ class PDFViewerApp:
         x = (sw - w) // 2
         y = (sh - h) // 2
         self.root.geometry(f"{w}x{h}+{x}+{y}")
-
-    def _apply_styles(self):
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        style.configure("TFrame", background=COLOR_BG)
-        style.configure("Sidebar.TFrame", background=COLOR_SIDEBAR)
-        style.configure("Content.TFrame", background=COLOR_BG)
-
-        style.configure(
-            "Title.TLabel",
-            background=COLOR_SIDEBAR,
-            foreground=COLOR_TEXT,
-            font=FONT_TITLE,
-        )
-        style.configure(
-            "Subtitle.TLabel",
-            background=COLOR_SIDEBAR,
-            foreground=COLOR_MUTED,
-            font=FONT_SUBTITLE,
-        )
-        style.configure(
-            "Info.TLabel",
-            background=COLOR_SIDEBAR,
-            foreground=COLOR_MUTED,
-            font=FONT_INFO,
-        )
-        style.configure(
-            "Status.TLabel",
-            background=COLOR_SIDEBAR,
-            foreground=COLOR_SUCCESS,
-            font=FONT_STATUS,
-        )
-        style.configure(
-            "Footer.TLabel",
-            background=COLOR_SIDEBAR,
-            foreground=COLOR_MUTED,
-            font=("Segoe UI", 8),
-        )
-
-        style.configure(
-            "Primary.TButton",
-            font=FONT_BUTTON,
-            padding=10,
-            background=COLOR_PRIMARY,
-            foreground="white",
-            borderwidth=0,
-            focusthickness=0,
-        )
-        style.map(
-            "Primary.TButton",
-            background=[
-                ("active", COLOR_PRIMARY_DARK),
-                ("disabled", "#B9C6E4"),
-            ],
-            foreground=[("disabled", "#F0F0F0")],
-        )
-
-        style.configure(
-            "Secondary.TButton",
-            font=FONT_BUTTON,
-            padding=10,
-            background="#EDF1F7",
-            foreground=COLOR_TEXT,
-            borderwidth=0,
-        )
-        style.map(
-            "Secondary.TButton",
-            background=[("active", "#DDE4EF"), ("disabled", "#F3F4F6")],
-            foreground=[("disabled", "#B0B7C3")],
-        )
-
-        style.configure("TPanedwindow", background=COLOR_BG)
-        style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
-        style.configure("TNotebook.Tab", font=FONT_BUTTON, padding=(16, 8))
-        style.map(
-            "TNotebook.Tab",
-            background=[("selected", "white")],
-            foreground=[("selected", COLOR_PRIMARY)],
-        )
-
-        style.configure(
-            "Treeview",
-            font=("Segoe UI", 9),
-            rowheight=26,
-            background="white",
-            fieldbackground="white",
-            foreground=COLOR_TEXT,
-        )
-        style.configure(
-            "Treeview.Heading",
-            font=("Segoe UI", 9, "bold"),
-            background="#EEF1F5",
-            foreground=COLOR_TEXT,
-            padding=6,
-        )
-        style.map(
-            "Treeview",
-            background=[("selected", COLOR_PRIMARY)],
-            foreground=[("selected", "white")],
-        )
-
-    def _build_warning_box(self, parent):
-        warning_frame = tk.Frame(
-            parent,
-            bg="#FDECEA",
-            highlightbackground="#D93025",
-            highlightthickness=2,
-            bd=0,
-        )
-        warning_frame.pack(fill=tk.X, pady=(0, 15))
-
-        warning_label = tk.Label(
-            warning_frame,
-            text=(
-                "⚠️ Recuerde que este programa únicamente puede usarse con"
-                " archivos PDF que contengan texto (no imágenes escaneadas), y"
-                " que el soporte actual es exclusivo para extractos con el"
-                " formato de Bancolombia y Banco de Bogotá. Otros bancos pueden no ser compatibles hasta el momento"
-            ),
-            bg="#FDECEA",
-            fg="#D93025",
-            font=("Segoe UI", 8),
-            wraplength=220,
-            justify="left",
-            padx=10,
-            pady=8,
-        )
-        warning_label.pack(fill=tk.X)
 
     # ------------------------------------------------------------------
     # Construcción de la interfaz
@@ -252,7 +118,7 @@ class PDFViewerApp:
         banco_frame = tk.Frame(
             left_frame,
             bg="#EAF1FB",
-            highlightbackground=COLOR_PRIMARY,
+            highlightbackground="#2F6FED",
             highlightthickness=1,
             bd=0,
         )
@@ -262,7 +128,7 @@ class PDFViewerApp:
             banco_frame,
             text="  Selecciona tu banco",
             bg="#EAF1FB",
-            fg=COLOR_PRIMARY_DARK,
+            fg="#2457BE",
             font=("Segoe UI", 10, "bold"),
         )
         lbl_banco.pack(anchor="w", padx=10, pady=(10, 4))
@@ -281,8 +147,9 @@ class PDFViewerApp:
         self.combo_bancos.pack(fill=tk.X, padx=10, pady=(0, 10))
         self.combo_bancos.bind("<<ComboboxSelected>>", self._on_banco_seleccionado)
 
-        self._build_warning_box(left_frame)
-# Botón para Extractos
+        construir_warning_box(left_frame)
+
+        # Botón para Extractos
         self.btn_extractos = ttk.Button(
             left_frame,
             text="📄 Cargar Extracto",
@@ -314,20 +181,21 @@ class PDFViewerApp:
             state=tk.DISABLED,
         )
         self.btn_movimientos_soc.pack(fill=tk.X, pady=6)
+
         self.btn_load_excel = ttk.Button(
-                left_frame,
-                text="📊 Cargar Excel",
-                command=self.cargar_archivo_excel,  # <--- Vinculación agregada
-                style="Primary.TButton",
-                cursor="hand2",
-                state=tk.DISABLED,
-            )
+            left_frame,
+            text="📊 Cargar Excel",
+            command=self.cargar_archivo_excel,
+            style="Primary.TButton",
+            cursor="hand2",
+            state=tk.DISABLED,
+        )
         self.btn_load_excel.pack(fill=tk.X, pady=6)
 
         self.btn_editarbancarios = ttk.Button(
             left_frame,
             text="✏️ Editar Bancarios",
-            command=lambda: self.abrir_clasificador(),  # <--- Usamos un método intermediario o lambda
+            command=lambda: self.abrir_clasificador(),
             style="Primary.TButton",
             cursor="hand2",
             state=tk.DISABLED,
@@ -343,18 +211,16 @@ class PDFViewerApp:
             self.btn_editarbancarios,
         ]
 
-# Crear el botón "Limpiar / Nuevo Documento"
+        # Crear el botón "Limpiar / Nuevo Documento"
         self.btn_limpiar = tk.Button(
-            left_frame,  # o el frame/contenedor donde tengas tus botones
+            left_frame,
             text="Limpiar Sesión",
             command=self.limpiar_sesion,
-            bg="#f44336",  # Color rojo/alerta (opcional)
+            bg="#f44336",
             fg="#FFFFFF",
             state="disabled",
-            
-              # Empieza deshabilitado hasta que se cargue un archivo
         )
-        self.btn_limpiar.pack(fill=tk.X, pady=6)   
+        self.btn_limpiar.pack(fill=tk.X, pady=6)
 
         self.btn_process = ttk.Button(
             left_frame,
@@ -366,6 +232,28 @@ class PDFViewerApp:
         )
         self.btn_process.pack(fill=tk.X, pady=6)
 
+        # ----------------------------------------------------------
+        # BARRA DE PROGRESO
+        # ----------------------------------------------------------
+        progress_frame = ttk.Frame(left_frame, style="Sidebar.TFrame")
+        progress_frame.pack(fill=tk.X, pady=(12, 4))
+
+        self.progress_label = ttk.Label(
+            progress_frame,
+            text="Listo",
+            style="Info.TLabel"
+        )
+        self.progress_label.pack(anchor="w", pady=(0, 4))
+
+        self.progress_bar = ttk.Progressbar(
+            progress_frame,
+            orient="horizontal",
+            mode="determinate",
+            maximum=100,
+            value=0
+        )
+        self.progress_bar.pack(fill=tk.X)
+
         self.btn_open_excel = ttk.Button(
             left_frame,
             text="↗️ Abrir Excel",
@@ -374,7 +262,7 @@ class PDFViewerApp:
             style="Secondary.TButton",
             cursor="hand2",
         )
-        
+
         self.btn_open_excel.pack(fill=tk.X, pady=6)
 
         ttk.Separator(left_frame, orient="horizontal").pack(fill=tk.X, pady=18)
@@ -414,7 +302,6 @@ class PDFViewerApp:
         self.tab_pdf = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_pdf, text="  📄 Vista Previa PDF  ")
 
-        # Scrollbar y Canvas empaquetados explícitamente
         scrollbar = ttk.Scrollbar(self.tab_pdf, orient=tk.VERTICAL)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
@@ -428,13 +315,11 @@ class PDFViewerApp:
 
         scrollbar.config(command=self.canvas.yview)
 
-        # Frame contenedor interno para las páginas del PDF
         self.scrollable_frame = ttk.Frame(self.canvas)
         self.canvas_window = self.canvas.create_window(
             (0, 0), window=self.scrollable_frame, anchor="nw"
         )
 
-        # Eventos para ajustar el scrollbar y permitir la rueda del ratón
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.canvas.configure(
@@ -450,20 +335,80 @@ class PDFViewerApp:
         self.notebook_hojas = ttk.Notebook(self.tab_excel)
         self.notebook_hojas.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        # Estado inicial: nada habilitado hasta elegir un banco.
         self._on_banco_seleccionado()
 
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # PROGRESS BAR
+    # ------------------------------------------------------------------
+
+    def iniciar_progreso(self, texto="Procesando...", indeterminado=False):
+        self.progress_label.config(text=texto)
+
+        if indeterminado:
+            self.progress_bar.config(mode="indeterminate")
+            self.progress_bar.start(10)
+        else:
+            self.progress_bar.stop()
+            self.progress_bar.config(
+                mode="determinate",
+                maximum=100,
+                value=0
+            )
+
+        self.root.update_idletasks()
+
+    def actualizar_progreso(self, valor, texto=None):
+        if self.progress_bar["mode"] != "determinate":
+            return
+
+        valor = max(0, min(100, valor))
+        self.progress_bar["value"] = valor
+
+        if texto:
+            self.progress_label.config(text=texto)
+
+    def finalizar_progreso(self, texto="Proceso completado"):
+        self.progress_bar.stop()
+        self.progress_bar.config(
+            mode="determinate",
+            maximum=100,
+            value=100
+        )
+        self.progress_label.config(text=texto)
+
+    def resetear_progreso(self):
+        self.progress_bar.stop()
+        self.progress_bar.config(
+            mode="determinate",
+            maximum=100,
+            value=0
+        )
+        self.progress_label.config(text="Listo")
+
+    def _set_botones_bloqueados(self, bloqueados: bool):
+        """Evita disparar una segunda tarea pesada mientras un hilo secundario trabaja."""
+        estado = tk.DISABLED if bloqueados else tk.NORMAL
+        for btn in (
+            self.btn_process,
+            self.btn_load_excel,
+            self.btn_editarbancarios,
+        ):
+            btn.config(state=estado)
+
+        for btn in self.botones_dependientes_banco:
+            if btn is self.btn_load_excel or btn is self.btn_editarbancarios:
+                continue
+            if not bloqueados:
+                # Al reactivar, respetar las reglas del banco seleccionado.
+                self._on_banco_seleccionado()
+                break
+            btn.config(state=tk.DISABLED)
+
+    # ------------------------------------------------------------------
     # Lógica y Eventos
     # ------------------------------------------------------------------
 
     def _on_banco_seleccionado(self, event=None):
-        """Habilita/deshabilita los botones de carga según el banco elegido.
-
-        - Sin selección: todo deshabilitado.
-        - Bancolombia: todos los botones disponibles.
-        - Banco de Bogotá: únicamente "Cargar Extracto".
-        """
         seleccion = self.combo_bancos.get()
 
         if seleccion.startswith("Bancolombia"):
@@ -478,23 +423,21 @@ class PDFViewerApp:
                 btn.config(state=tk.DISABLED)
 
     def abrir_clasificador(self):
-        # Verificamos si ya hay un Excel generado y cargado en el sistema
         ruta_excel = getattr(self.pdf_engine, "last_excel_path", None)
-        
+
         if not ruta_excel:
             messagebox.showwarning(
-                "Aviso", 
+                "Aviso",
                 "Primero debes procesar un PDF para generar un archivo Excel."
             )
             return
-            
-        # Si existe, abrimos el clasificador pasándole la ruta actual
-        ClasificadorConceptos(self.root, ruta_excel, self.cargar_excel_en_gui)
-        
-    def cargar_archivo_excel(self):
-        """Abre un explorador para seleccionar un archivo .xlsx, lo procesa con
 
-        parser_excel.py y muestra el resultado filtrado en la interfaz.
+        ClasificadorConceptos(self.root, ruta_excel, self.cargar_excel_en_gui)
+
+    def cargar_archivo_excel(self):
+        """Abre un explorador, selecciona un .xlsx y lo procesa con parser_excel.py
+
+        en un hilo secundario para no congelar la interfaz.
         """
         if extraer_datos_desde_excel is None:
             messagebox.showerror(
@@ -511,62 +454,68 @@ class PDFViewerApp:
         if not file_path:
             return
 
-        try:
-            self.root.config(cursor="watch")
-            self.info_label.config(
-                text="⏳ Procesando y reorganizando Excel...",
-                style="Info.TLabel",
-            )
-            self.root.update_idletasks()
+        base_dir, file_name = os.path.split(file_path)
+        name, ext = os.path.splitext(file_name)
+        output_path = os.path.join(base_dir, f"{name}_procesado{ext}")
 
-            # Definir la ruta de salida para el Excel procesado
-            base_dir, file_name = os.path.split(file_path)
-            name, ext = os.path.splitext(file_name)
-            output_path = os.path.join(base_dir, f"{name}_procesado{ext}")
+        self.root.config(cursor="watch")
+        self._set_botones_bloqueados(True)
+        self.iniciar_progreso(
+            "Procesando y reorganizando Excel...", indeterminado=True
+        )
+        self.info_label.config(
+            text="⏳ Procesando y reorganizando Excel...",
+            style="Info.TLabel",
+        )
 
-            # 1. Llamar a la función del nuevo archivo 'parser_excel.py'
-            excel_procesado = extraer_datos_desde_excel(
-                file_path, output_path
-            )
+        def tarea(cola):
+            resultado = extraer_datos_desde_excel(file_path, output_path)
+            cola.put(("exito", resultado, None))
 
-            # 2. Guardar la ruta en el motor de la app
-            if hasattr(self, "pdf_engine") and self.pdf_engine:
-                self.pdf_engine.last_excel_path = excel_procesado
+        self.trabajador.ejecutar(
+            tarea,
+            on_exito=self._on_excel_procesado,
+            on_error=self._on_error_excel_procesado,
+        )
 
-            # 3. Renderizar las pestañas (Movimientos y Resumen) en el Treeview
-            self.cargar_excel_en_gui(excel_procesado)
+    def _on_excel_procesado(self, excel_procesado):
+        self.root.config(cursor="")
+        self._set_botones_bloqueados(False)
 
-            # 4. Actualizar estado y botones de la interfaz
-            filename_clean = os.path.basename(excel_procesado)
-            self.info_label.config(
-                text=f"📊 Excel procesado:\n{filename_clean}",
-                style="Status.TLabel",
-            )
+        if hasattr(self, "pdf_engine") and self.pdf_engine:
+            self.pdf_engine.last_excel_path = excel_procesado
 
-            if hasattr(self, "btn_open_excel") and self.btn_open_excel:
-                self.btn_open_excel.config(
-                    state=tk.NORMAL, style="Secondary.TButton"
-                )
+        self.finalizar_progreso("Excel procesado correctamente")
 
-            if hasattr(self, "btn_limpiar") and self.btn_limpiar:
-                self.btn_limpiar.config(state="normal")
+        filename_clean = os.path.basename(excel_procesado)
+        self.info_label.config(
+            text=f"📊 Excel procesado:\n{filename_clean}",
+            style="Status.TLabel",
+        )
 
-            messagebox.showinfo(
-                "Proceso Exitoso",
-                f"El archivo Excel se ha formateado correctamente.\n\nGuardado en:\n{excel_procesado}",
-            )
+        if hasattr(self, "btn_open_excel") and self.btn_open_excel:
+            self.btn_open_excel.config(state=tk.NORMAL, style="Secondary.TButton")
 
-        except Exception as e:
-            self.info_label.config(
-                text="⚠️ Error al procesar el Excel.",
-                style="Info.TLabel",
-            )
-            messagebox.showerror(
-                "Error de Procesamiento",
-                f"No se pudo estructurar el archivo Excel:\n{str(e)}",
-            )
-        finally:
-            self.root.config(cursor="")
+        if hasattr(self, "btn_limpiar") and self.btn_limpiar:
+            self.btn_limpiar.config(state="normal")
+
+        messagebox.showinfo(
+            "Proceso Exitoso",
+            f"El archivo Excel se ha formateado correctamente.\n\nGuardado en:\n{excel_procesado}",
+        )
+
+    def _on_error_excel_procesado(self, error):
+        self.root.config(cursor="")
+        self._set_botones_bloqueados(False)
+        self.info_label.config(
+            text="⚠️ Error al procesar el Excel.",
+            style="Info.TLabel",
+        )
+        messagebox.showerror(
+            "Error de Procesamiento",
+            f"No se pudo estructurar el archivo Excel:\n{str(error)}",
+        )
+        self.resetear_progreso()
 
     def cargar_y_procesar_pdf(self, prefijo_tipo):
         file_path = filedialog.askopenfilename(
@@ -581,7 +530,6 @@ class PDFViewerApp:
             folder_path, old_filename = os.path.split(file_path)
             filename_lower = old_filename.lower()
 
-            # Lista de prefijos conocidos para evitar la duplicación de nombres
             prefijo_formateado = f"{prefijo_tipo}_"
             etiquetas_existentes = [
                 "extracto_",
@@ -603,7 +551,6 @@ class PDFViewerApp:
                     os.replace(file_path, new_file_path)
                     file_path = new_file_path
 
-            # Guardar ruta y tipo actual
             self.current_pdf_path = file_path
             self.tipo_documento = prefijo_tipo
             self.load_pdf(file_path)
@@ -619,82 +566,122 @@ class PDFViewerApp:
                 "Error al renombrar",
                 f"No se pudo asignar el nombre al archivo:\n{str(e)}",
             )
+
     def load_pdf(self, file_path):
-        try:
-            total_pages = self.pdf_engine.open_pdf(file_path)
+        while True:
+            try:
+                total_pages = self.pdf_engine.open_pdf(file_path)
+                break
 
-            # Limpiar páginas anteriores
-            for child in self.scrollable_frame.winfo_children():
-                child.destroy()
+            except PDFPasswordRequiredError:
+                password = simpledialog.askstring(
+                    "PDF protegido",
+                    "Este PDF está protegido con contraseña.\n\n"
+                    "Ingrese la contraseña para continuar:",
+                    parent=self.root,
+                    show="*"
+                )
 
-            # Renderizar las páginas en imágenes
-            for photo in self.pdf_engine.page_images:
-                lbl_page = ttk.Label(self.scrollable_frame, image=photo)
-                lbl_page.pack(pady=10, padx=20)
+                if password is None:
+                    return
 
-            filename = os.path.basename(file_path)
-            self.info_label.config(
-                text=f"📄 {filename}\nTotal páginas: {total_pages}",
-                style="Status.TLabel",
-            )
-            self.btn_process.config(state=tk.NORMAL, style="Primary.TButton")
-           
-            self.btn_open_excel.config(
-                state=tk.DISABLED, style="Secondary.TButton"
-            )
+                try:
+                    total_pages = self.pdf_engine.open_pdf(
+                        file_path, password=password
+                    )
+                    break
 
-            # Cambiar a la vista previa del PDF
-            self.notebook.select(self.tab_pdf)
+                except PDFInvalidPasswordError:
+                    messagebox.showerror(
+                        "Contraseña incorrecta",
+                        "La contraseña ingresada no es correcta.\n\n"
+                        "Inténtelo nuevamente.",
+                        parent=self.root
+                    )
 
-        except Exception as e:
-            messagebox.showerror(
-                "Error de Carga", f"No se pudo cargar el PDF:\n{str(e)}"    
-            )
-    def generar_nombre_limpio(
-        ruta_original, tipo_documento="Extracto_", extension_salida=".xlsx"
-    ):
-        """Genera un nombre de archivo asegurando que no se repitan los prefijos
+                except Exception as e:
+                    messagebox.showerror(
+                        "Error de Carga",
+                        f"No se pudo cargar el PDF:\n{str(e)}",
+                        parent=self.root
+                    )
+                    return
 
-        o sufijos como 'Extracto_' o 'Movimiento_'.
-        """
-        directorio, nombre_archivo = os.path.split(ruta_original)
-        nombre_base, _ = os.path.splitext(nombre_archivo)
+            except Exception as e:
+                messagebox.showerror(
+                    "Error de Carga",
+                    f"No se pudo cargar el PDF:\n{str(e)}",
+                    parent=self.root
+                )
+                return
 
-        # Convertimos a minúsculas solo para validar la existencia de palabras clave
-        nombre_lower = nombre_base.lower()
+        # A partir de aquí el documento ya está abierto (operación rápida).
+        # El renderizado de páginas (pesado) se ejecuta en un hilo secundario.
+        for child in self.scrollable_frame.winfo_children():
+            child.destroy()
+        self._photo_images.clear()
 
-        # Palabras clave que queremos evitar duplicar
-        palabras_clave = [
-            "extracto_",
-            "extracto",
-            "movimiento_",
-            "movimientos_",
-            "movimiento",
-            "movimientos",
-        ]
+        self.root.config(cursor="watch")
+        self._set_botones_bloqueados(True)
+        self.iniciar_progreso("Renderizando páginas... 0/%d" % total_pages)
 
-        # Verificar si el archivo YA contiene alguna de estas etiquetas al inicio o final
-        ya_tiene_etiqueta = any(
-            nombre_lower.startswith(p) or nombre_lower.endswith(p)
-            for p in palabras_clave
+        def tarea(cola):
+            def callback(indice, total):
+                porcentaje = (indice / total) * 100
+                cola.put((
+                    "progreso",
+                    porcentaje,
+                    f"Renderizando páginas... {indice}/{total}",
+                ))
+
+            self.pdf_engine.renderizar_paginas(progreso_callback=callback)
+            cola.put(("exito", (file_path, total_pages), None))
+
+        self.trabajador.ejecutar(
+            tarea,
+            on_progreso=self.actualizar_progreso,
+            on_exito=lambda datos: self._mostrar_paginas_renderizadas(*datos),
+            on_error=self._on_error_render_pdf,
         )
 
-        if not ya_tiene_etiqueta:
-            # Si NO la tiene, le agregamos el prefijo deseado (ej. "Extracto_12345.xlsx")
-            nuevo_nombre = f"{tipo_documento}{nombre_base}{extension_salida}"
-        else:
-            # Si YA la tiene, mantenemos el nombre base intacto y solo aseguramos la extensión
-            nuevo_nombre = f"{nombre_base}{extension_salida}"
+    def _mostrar_paginas_renderizadas(self, file_path, total_pages):
+        self.root.config(cursor="")
+        self._set_botones_bloqueados(False)
 
-        return os.path.join(directorio, nuevo_nombre)
+        for img in self.pdf_engine.page_images:
+            photo = ImageTk.PhotoImage(img)
+            self._photo_images.append(photo)
+
+            lbl_page = ttk.Label(self.scrollable_frame, image=photo)
+            lbl_page.pack(pady=10, padx=20)
+
+        filename = os.path.basename(file_path)
+
+        self.info_label.config(
+            text=f"📄 {filename}\nTotal páginas: {total_pages}",
+            style="Status.TLabel",
+        )
+
+        self.btn_process.config(state=tk.NORMAL, style="Primary.TButton")
+        self.btn_open_excel.config(state=tk.DISABLED, style="Secondary.TButton")
+
+        self.notebook.select(self.tab_pdf)
+        self.finalizar_progreso(f"PDF cargado correctamente • {total_pages} páginas")
+
+    def _on_error_render_pdf(self, error):
+        self.root.config(cursor="")
+        self._set_botones_bloqueados(False)
+        self.resetear_progreso()
+        messagebox.showerror(
+            "Error de Carga",
+            f"No se pudo renderizar el PDF:\n{str(error)}",
+        )
 
     def process_pdf(self):
         if not self.pdf_engine.has_document:
             messagebox.showwarning("Atención", "Carga un archivo PDF primero.")
             return
 
-        # Determinar el backend según lo que el usuario eligió en el combo,
-        # en vez de invocar siempre el de Banco de Bogotá.
         banco_seleccionado = (
             self.combo_bancos.get() if hasattr(self, "combo_bancos") else ""
         )
@@ -719,11 +706,9 @@ class PDFViewerApp:
         )[0]
         nombre_lower = nombre_base_pdf.lower()
 
-        # Determinar el tipo de documento activo
         tipo_actual = getattr(self, "tipo_documento", "Extracto")
         etiqueta_sugerida = f"{tipo_actual}_"
 
-        # Palabras clave ampliadas
         palabras_clave = [
             "extracto_",
             "extracto",
@@ -756,59 +741,92 @@ class PDFViewerApp:
             return
 
         self.root.config(cursor="watch")
+        self._set_botones_bloqueados(True)
+        self.iniciar_progreso("Procesando PDF, por favor espera...")
         self.info_label.config(
-            text="⏳ Procesando PDF, por favor espera...", style="Info.TLabel"
+            text="⏳ Procesando PDF, por favor espera...",
+            style="Info.TLabel"
         )
-        self.root.update_idletasks()
 
-        try:
-            # --- SELECCIÓN DEL BACKEND SEGÚN EL COMBO ---
+        pdf_path = self.pdf_engine.current_path
+
+        def tarea(cola):
+            def callback(indice, total):
+                # La extracción se pondera hasta el 85%; el resto es la
+                # generación/formato del Excel.
+                porcentaje = (indice / total) * 85
+                cola.put((
+                    "progreso",
+                    porcentaje,
+                    f"Extrayendo movimientos... página {indice}/{total}",
+                ))
+
+            cola.put(("progreso", 0, "Leyendo el PDF..."))
+
             if usa_bogota:
                 excel_generado = exportar_bogota(
-                    self.pdf_engine.current_path, output_excel_path=save_path
+                    pdf_path,
+                    output_excel_path=save_path,
+                    progreso_callback=callback,
                 )
             else:
                 excel_generado = ejecutar_proceso_exportacion(
-                    self.pdf_engine.current_path, output_excel_path=save_path
+                    pdf_path,
+                    output_excel_path=save_path,
+                    progreso_callback=callback,
                 )
 
             if not excel_generado:
                 raise ValueError("No se obtuvieron registros del documento procesado.")
 
-            self.pdf_engine.last_excel_path = excel_generado
+            cola.put(("progreso", 95, "Generando archivo Excel..."))
+            cola.put(("exito", excel_generado, None))
 
-            self.btn_open_excel.config(
-                state=tk.NORMAL, style="Secondary.TButton"
-            )
+        self.trabajador.ejecutar(
+            tarea,
+            on_progreso=self.actualizar_progreso,
+            on_exito=self._on_pdf_procesado,
+            on_error=self._on_error_process_pdf,
+        )
 
-            self.info_label.config(
-                text=(
-                    "✅ Excel"
-                    f" generado:\n{os.path.basename(excel_generado)}"
-                ),
-                style="Status.TLabel",
-            )
-            
-            # Apertura del clasificador visual y actualización en GUI
-            ClasificadorConceptos(self.root, excel_generado, self.cargar_excel_en_gui)
-            self.cargar_excel_en_gui(excel_generado)
+    def _on_pdf_procesado(self, excel_generado):
+        self.root.config(cursor="")
+        self._set_botones_bloqueados(False)
 
-            messagebox.showinfo(
-                "Proceso Exitoso",
-                "¡Extracción completada!\n\nArchivo guardado"
-                f" en:\n{excel_generado}",
-            )
-        except Exception as e:
-            self.info_label.config(
-                text="⚠️ Ocurrió un error al procesar el PDF.",
-                style="Info.TLabel",
-            )
-            messagebox.showerror(
-                "Error al procesar",
-                f"Ocurrió un error en la extracción:\n{str(e)}",
-            )
-        finally:
-            self.root.config(cursor="")
+        self.pdf_engine.last_excel_path = excel_generado
+
+        self.btn_open_excel.config(state=tk.NORMAL, style="Secondary.TButton")
+
+        self.info_label.config(
+            text=(
+                "✅ Excel"
+                f" generado:\n{os.path.basename(excel_generado)}"
+            ),
+            style="Status.TLabel",
+        )
+
+        ClasificadorConceptos(self.root, excel_generado, self.cargar_excel_en_gui)
+        self.cargar_excel_en_gui(excel_generado)
+        self.finalizar_progreso("Extracción completada correctamente")
+
+        messagebox.showinfo(
+            "Proceso Exitoso",
+            "¡Extracción completada!\n\nArchivo guardado"
+            f" en:\n{excel_generado}",
+        )
+
+    def _on_error_process_pdf(self, error):
+        self.root.config(cursor="")
+        self._set_botones_bloqueados(False)
+        self.info_label.config(
+            text="⚠️ Ocurrió un error al procesar el PDF.",
+            style="Info.TLabel",
+        )
+        messagebox.showerror(
+            "Error al procesar",
+            f"Ocurrió un error en la extracción:\n{str(error)}",
+        )
+        self.resetear_progreso()
 
     def cargar_excel_en_gui(self, excel_path):
         if not excel_path or not os.path.exists(excel_path):
@@ -859,7 +877,6 @@ class PDFViewerApp:
 
             self.notebook.select(self.tab_excel)
 
-            # 🟢 Habilitar el botón de limpiar sin llamar a update_idletasks en 'self'
             if hasattr(self, "btn_limpiar") and self.btn_limpiar is not None:
                 try:
                     self.btn_limpiar.configure(state="normal")
@@ -872,12 +889,7 @@ class PDFViewerApp:
             )
 
     def liberar_pdf(self):
-        """Limpia la vista previa de las páginas del PDF y resetea el scrollbar
-
-        sin destruir la estructura del visor.
-        """
         try:
-            # 1. Resetear variables de ruta en el motor y en la GUI
             if hasattr(self, "pdf_engine") and self.pdf_engine:
                 if hasattr(self.pdf_engine, "current_path"):
                     self.pdf_engine.current_path = None
@@ -887,31 +899,26 @@ class PDFViewerApp:
             if hasattr(self, "current_pdf_path"):
                 self.current_pdf_path = None
 
-            # 2. VACIAR LAS IMÁGENES DENTRO DEL SCROLLABLE_FRAME
             if hasattr(self, "scrollable_frame") and self.scrollable_frame:
                 for child in self.scrollable_frame.winfo_children():
                     child.destroy()
 
-            # 3. RESETEAR EL CANVAS Y EL SCROLLBAR
+            self._photo_images.clear()
+
             if hasattr(self, "canvas") and self.canvas:
-                # Eliminar cualquier elemento dibujado directamente en el canvas
                 self.canvas.delete("all")
-                # Volver a vincular la ventana para que el scrollable_frame siga dentro
                 if hasattr(self, "scrollable_frame"):
                     self.canvas_window = self.canvas.create_window(
                         (0, 0), window=self.scrollable_frame, anchor="nw"
                     )
-                # Resetear la región de scroll a cero
                 self.canvas.configure(scrollregion=(0, 0, 0, 0))
                 self.canvas.yview_moveto(0)
 
-            # 4. Vaciar referencias de imágenes en memoria para liberar RAM
             if hasattr(self, "pdf_images"):
                 self.pdf_images = []
             if hasattr(self, "pdf_image"):
                 self.pdf_image = None
 
-            # 5. LIMPIAR PANEL DE ESTADO (Texto del archivo y páginas abajo a la izquierda)
             if hasattr(self, "lbl_pdf_nombre") and self.lbl_pdf_nombre:
                 self.lbl_pdf_nombre.config(text="")
 
@@ -926,29 +933,25 @@ class PDFViewerApp:
                 "Error al liberar PDF",
                 f"Ocurrió un error al limpiar la vista previa del PDF:\n{e}",
             )
+
     def liberar_excel(self):
-        """Libera la vista previa, los dataframes y los recursos asociados al Excel."""
         try:
-            # 1. Resetear referencias y DataFrames en el motor
             if hasattr(self, "pdf_engine") and self.pdf_engine:
                 if hasattr(self.pdf_engine, "last_excel_path"):
                     self.pdf_engine.last_excel_path = None
                 if hasattr(self.pdf_engine, "df_original_raw"):
                     self.pdf_engine.df_original_raw = None
 
-            # 2. Limpiar las pestañas de las hojas cargadas en la GUI (Notebook)
             if hasattr(self, "notebook_hojas") and self.notebook_hojas:
                 for tab in self.notebook_hojas.tabs():
                     self.notebook_hojas.forget(tab)
 
-            # 3. Deshabilitar el botón de "Abrir Excel" (si aplica en tu interfaz)
             if hasattr(self, "btn_open_excel") and self.btn_open_excel:
                 try:
                     self.btn_open_excel.configure(state="disabled")
                 except Exception:
                     self.btn_open_excel.config(state="disabled")
 
-            # 4. Resetear etiqueta de estado del Excel si la utilizas
             if hasattr(self, "lbl_excel_estado") and self.lbl_excel_estado:
                 self.lbl_excel_estado.config(text="")
 
@@ -957,21 +960,18 @@ class PDFViewerApp:
                 "Error al liberar Excel",
                 f"Ocurrió un error al limpiar la vista previa del Excel:\n{e}",
             )
+
     def limpiar_sesion(self):
-        """Limpia la sesión de trabajo activa (PDF, imágenes de vista previa y Excel)."""
         try:
-            # Siempre ejecutamos liberar_pdf y liberar_excel
             self.liberar_pdf()
             self.liberar_excel()
 
-            # Deshabilitar el botón nuevamente
             if hasattr(self, "btn_limpiar") and self.btn_limpiar:
                 try:
                     self.btn_limpiar.configure(state="disabled")
                 except Exception:
                     self.btn_limpiar.config(state="disabled")
 
-            # Deshabilitar botones de acción secundarios (como "Extraer TXT y Excel" o "Abrir Excel")
             if hasattr(self, "btn_open_excel"):
                 self.btn_open_excel.config(state="disabled")
 
@@ -984,6 +984,7 @@ class PDFViewerApp:
             messagebox.showerror(
                 "Error", f"Ocurrió un error al limpiar la sesión:\n{e}"
             )
+
     def open_excel(self):
         if not self.pdf_engine.open_generated_excel():
             messagebox.showerror("Error", "No se encontró el archivo Excel.")
