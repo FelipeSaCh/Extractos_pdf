@@ -46,7 +46,12 @@ try:
 except ImportError as err:
     extraer_datos_desde_excel = None
     _import_parser_error_msg = str(err)
-
+try:
+    from script_davivienda import ejecutar_proceso_exportacion as exportar_davivienda
+except Exception as e:
+    exportar_davivienda = None
+    if _import_error_msg is None:
+        _import_error_msg = str(e)
 
 class PDFViewerApp:
 
@@ -54,7 +59,7 @@ class PDFViewerApp:
         self.root = root
         self.root.title(f"Lector de extractos v{__version__} - Tkinter")
         self.root.geometry("1100x720")
-        self.root.minsize(900, 600)
+        self.root.minsize(1100, 900)
         self.root.configure(bg=COLOR_BG)
 
         self.pdf_engine = PDFEngine()
@@ -121,7 +126,8 @@ class PDFViewerApp:
             fill=tk.X, pady=(0, 18)
         )
 
-        # Bloque de selección de banco: primer paso obligatorio, muy visible.
+        # Bloque de selección de banco
+        construir_warning_box(left_frame) #Advertencia sobre compatibilidad de bancos y archivos PDF
         banco_frame = tk.Frame(
             left_frame,
             bg="#EAF1FB",
@@ -140,13 +146,16 @@ class PDFViewerApp:
         )
         lbl_banco.pack(anchor="w", padx=10, pady=(10, 4))
 
+        
+
         self.combo_bancos = ttk.Combobox(
             banco_frame,
             values=[
                 "-- Selecciona un banco --",
                 "Bancolombia (Estándar)",
                 "Banco de Bogotá (Extractos PyME)",
-                "Nequi"
+                "Nequi",
+                "Davivienda"
             ],
             state="readonly",
             font=("Segoe UI", 10),
@@ -155,7 +164,7 @@ class PDFViewerApp:
         self.combo_bancos.pack(fill=tk.X, padx=10, pady=(0, 10))
         self.combo_bancos.bind("<<ComboboxSelected>>", self._on_banco_seleccionado)
 
-        construir_warning_box(left_frame)
+        
 
         # Botón para Extractos
         self.btn_extractos = ttk.Button(
@@ -422,11 +431,8 @@ class PDFViewerApp:
         if seleccion.startswith("Bancolombia"):
             for btn in self.botones_dependientes_banco:
                 btn.config(state=tk.NORMAL)
-        elif seleccion.startswith("Banco de Bogotá"):
-            for btn in self.botones_dependientes_banco:
-                btn.config(state=tk.DISABLED)
-            self.btn_extractos.config(state=tk.NORMAL)
-        elif seleccion.startswith("Nequi"):
+        elif seleccion.startswith("Banco de Bogotá") or seleccion.startswith("Nequi") or seleccion.startswith("Davivienda"):
+            # Comportamiento unificado: Desactivamos botones avanzados de Bancolombia, pero activamos Cargar PDF
             for btn in self.botones_dependientes_banco:
                 btn.config(state=tk.DISABLED)
             self.btn_extractos.config(state=tk.NORMAL)
@@ -700,6 +706,7 @@ class PDFViewerApp:
         usa_bogota = banco_seleccionado.startswith("Banco de Bogotá")
         usa_nequi = banco_seleccionado.startswith("Nequi")
         usa_bancolombia = banco_seleccionado.startswith("Bancolombia")
+        usa_davivienda = banco_seleccionado.startswith("Davivienda")
 
         if usa_bogota and exportar_bogota is None:
             messagebox.showerror(
@@ -721,6 +728,12 @@ class PDFViewerApp:
                 f"No se pudo importar el script de Bancolombia:\n{_import_error_msg}",
             )
             return
+        elif usa_davivienda and exportar_davivienda is None:
+            messagebox.showerror(
+                "Error de Módulo",
+                "No se pudo importar el script de Davivienda."
+            )
+            return 
 
         nombre_base_pdf = os.path.splitext(
             os.path.basename(self.pdf_engine.current_path)
@@ -798,6 +811,12 @@ class PDFViewerApp:
                 )
             elif usa_bancolombia:
                 excel_generado = exportar_bancolombia(
+                    pdf_path,
+                    output_excel_path=save_path,
+                    progreso_callback=callback,
+                )
+            elif usa_davivienda: # <-- NUEVO
+                excel_generado = exportar_davivienda(
                     pdf_path,
                     output_excel_path=save_path,
                     progreso_callback=callback,

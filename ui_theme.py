@@ -140,9 +140,8 @@ def construir_warning_box(parent):
         warning_frame,
         text=(
             "⚠️ Recuerde que este programa únicamente puede usarse con"
-            " archivos PDF que contengan texto (no imágenes escaneadas), y"
-            " que el soporte actual es exclusivo para extractos con el"
-            " formato de Bancolombia y Banco de Bogotá. Otros bancos pueden no ser compatibles hasta el momento"
+            " archivos PDF que contengan texto (no imágenes escaneadas)," \
+            "los bancos soportados se muestran a continuacion:"
         ),
         bg="#FDECEA",
         fg="#D93025",
