@@ -219,6 +219,15 @@ class PDFViewerApp:
         )
         self.btn_editarbancarios.pack(fill=tk.X, pady=6)
 
+        self.btn_archivo_plano = ttk.Button(
+            left_frame,
+            text="🗄️ Generar Archivo Plano",
+            command=None,
+            style="Primary.TButton",
+            cursor="hand2",
+            state=tk.DISABLED,
+        )
+        self.btn_archivo_plano.pack(fill=tk.X, pady=6)
         # Botones cuya disponibilidad depende del banco elegido arriba.
         self.botones_dependientes_banco = [
             self.btn_extractos,
@@ -226,6 +235,7 @@ class PDFViewerApp:
             self.btn_movimientos_soc,
             self.btn_load_excel,
             self.btn_editarbancarios,
+            self.btn_archivo_plano,
         ]
 
         # Crear el botón "Limpiar / Nuevo Documento"
@@ -248,6 +258,8 @@ class PDFViewerApp:
             cursor="hand2",
         )
         self.btn_process.pack(fill=tk.X, pady=6)
+
+
 
         # ----------------------------------------------------------
         # BARRA DE PROGRESO
@@ -424,6 +436,29 @@ class PDFViewerApp:
     # ------------------------------------------------------------------
     # Lógica y Eventos
     # ------------------------------------------------------------------
+
+    # Agrega esta función dentro de la clase PDFViewerApp en app_gui.py
+    def generar_archivo_plano_manual(self):
+        file_path = filedialog.askopenfilename(
+            title="Seleccionar Excel procesado para Archivo Plano",
+            filetypes=[("Archivos de Excel", "*.xlsx;*.xls")]
+        )
+        if not file_path:
+            return
+            
+        try:
+            # Importación local para no ralentizar el inicio de la app
+            from archivo_plano import GeneradorArchivoPlano 
+            
+            self.root.config(cursor="watch")
+            generador = GeneradorArchivoPlano(file_path)
+            ruta_plano = generador.generar()
+            self.root.config(cursor="")
+            
+            messagebox.showinfo("Éxito", f"Archivo plano generado correctamente en:\n{ruta_plano}")
+        except Exception as e:
+            self.root.config(cursor="")
+            messagebox.showerror("Error", f"No se pudo generar el archivo plano:\n{str(e)}")
 
     def _on_banco_seleccionado(self, event=None):
         seleccion = self.combo_bancos.get()
