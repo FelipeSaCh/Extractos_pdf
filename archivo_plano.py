@@ -2,32 +2,51 @@ import pandas as pd
 import numpy as np
 import re
 import os
+import datetime
 import win32com.client as win32
 import pythoncom
-import datetime
+
 
 class GeneradorArchivoPlano:
     COLUMNAS_PLANO = [
         "libro", "tipo", "numero", "ano", "mes", "dia", "detalle", "anulado",
-        "ccosto", "sccosto", "docrela", "cuota", "artrela", "artcant", "base",
-        "base2", "fechaven", "area", "numexterno", "anexo", "bodega", "codpuc",
-        "tercero", "debito", "credito", "nombre"
+        "codpuc", "tercero", "ccosto", "sccosto", "docrela", "cuota", "artrela",
+        "artcant", "debito", "credito", "nombre", "base", "base2", "fechaven",
+        "area", "numexterno", "anexo", "bodega"
     ]
 
-    # Orden = prioridad de coincidencia (IVA antes que TARJETA/SERVICIOS)
     CONCEPTOS_BANCARIOS = [
         ("GMF 4X1000", r"4\s*X\s*1\.?000"),
         ("IVA", r"\bIVA\b"),
+        ("CUOTA PLAN CANAL NEGOCIOS", r"CUOTA\s+PLAN\s+CANAL\s+NEGOCIOS"),
         ("TARJETA DE CREDITO", r"TARJETA\s+DE\s+CR[EÉ]DITO"),
-        ("SERVICIOS", r"SERVICIOS"),
+        ("COMISION", r"COMISI[OÓ]N"),
+        ("SERVICIO", r"SERVICIO"),
+        ("TARJ DEB", r"TARJ\s+DEB"),
+        ("INTERESES AHORROS", r"INTERESES\s+AHORROS"),
     ]
     CODPUC_BANCARIOS = {
         "GMF 4X1000": "530595001",
         "IVA": "530505002",
+        "CUOTA PLAN CANAL NEGOCIOS": "530505001",
         "TARJETA DE CREDITO": "530505003",
-        "SERVICIOS": "530505001",
+        "COMISION": "530515001",
+        "SERVICIO": "530505001",
+        "TARJ DEB": "530505001",
+        "INTERESES AHORROS": "421005001",
     }
-    TIPO_BANCARIOS = "NB1"
+    CODPUC_BANCO = "112005001"
+    CODPUC_PROVEEDORES = "220501001"
+    CODPUC_CLIENTES = "130505001"
+
+    TIPO_EGRESO = "EG1"
+    TIPO_NOMINA = "EG2"
+    TIPO_RECIBO = "RC1"
+    TIPO_BANCARIOS = "CC1"
+
+    PATRON_NOMINA = r"PAGO A NOMIN"
+    DETALLE_NOMINA = "PAGO A NOMIN"
+
     MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
              "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
 
@@ -36,8 +55,7 @@ class GeneradorArchivoPlano:
 
     def _limpiar_y_convertir_valores(self, df):
         if 'VALOR' not in df.columns:
-            return pd.Series([0.0] * len(df))
-            
+            return pd.Series(0.0, index=df.index)
         if df['VALOR'].dtype == object:
             valor_limpio = df['VALOR'].astype(str).str.replace(r'[^\d\.-]', '', regex=True)
             return pd.to_numeric(valor_limpio, errors='coerce').fillna(0.0)
@@ -46,89 +64,209 @@ class GeneradorArchivoPlano:
     def _es_tercero_valido(self, texto):
         if pd.isna(texto) or not texto:
             return ""
-            
         texto_limpio = str(texto).strip()
-        patron_identificacion = r"^\d{6,15}(?:-\d)?$"
-        
-        if re.match(patron_identificacion, texto_limpio):
+        if re.match(r"^\d{6,15}(?:-\d)?$", texto_limpio):
             return texto_limpio
         return ""
 
+    @staticmethod
+    def _entero_o_vacio(serie):
+        return serie.map(lambda x: str(int(x)) if pd.notna(x) else "")
+
+    def _extraer_fechas(self, df):
+        if 'FECHA' not in df.columns:
+            vacio = pd.Series(np.nan, index=df.index)
+            return vacio, vacio.copy(), vacio.copy()
+
+        fechas_dt = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True, format="mixed")
+        texto = df['FECHA'].astype(str)
+
+        dia = pd.to_numeric(fechas_dt.dt.day.fillna(texto.str.extract(r'^(\d{1,2})')[0]), errors='coerce')
+        mes = pd.to_numeric(fechas_dt.dt.month.fillna(texto.str.extract(r'[/.-](\d{1,2})')[0]), errors='coerce')
+        ano = pd.to_numeric(
+            fechas_dt.dt.year.replace(1900, np.nan).fillna(texto.str.extract(r'[/.-]\d{1,2}[/.-](\d{4})')[0]),
+            errors='coerce'
+        )
+        return ano.where(ano >= 2000), mes, dia
+
+    def _construir_movimientos(self, df, nit_empresa):
+        n = len(df)
+        valores = self._limpiar_y_convertir_valores(df)
+        ano, mes, dia = self._extraer_fechas(df)
+
+        desc = df.get("DESCRIPCIÓN", df.get("DESCRIPCION", pd.Series([""] * n, index=df.index)))
+        desc = desc.fillna("").astype(str).str.strip()
+
+        col_ref = next((c for c in ["REFERENCIA 1", "REFERENCIA", "DCTO."] if c in df.columns), None)
+        if col_ref:
+            ref = df[col_ref].fillna("").astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+            detalle = (desc + " " + ref).str.strip()
+            tercero = ref.apply(self._es_tercero_valido)
+        else:
+            detalle = desc
+            tercero = pd.Series("", index=df.index)
+
+        if nit_empresa:
+            tercero = tercero.replace("", nit_empresa)
+
+        mov = pd.DataFrame({
+            'tipo': "",
+            'ano': ano,
+            'mes': mes,
+            'dia': dia,
+            'desc': desc,
+            'detalle': detalle,
+            'tercero': tercero,
+            'valor': valores,
+            'codpuc_contra': "",
+        })
+        return mov[mov['valor'] != 0].reset_index(drop=True)
+
+    def _consolidar_bancarios(self, mov, nit_empresa):
+        desc_upper = mov['desc'].str.upper()
+        concepto = pd.Series("", index=mov.index)
+        for nombre, patron in self.CONCEPTOS_BANCARIOS:
+            coincide = desc_upper.str.contains(patron, regex=True, na=False)
+            concepto = concepto.mask((concepto == "") & coincide, nombre)
+
+        mask = (concepto != "") & mov['mes'].between(1, 12)
+        if not mask.any():
+            return mov
+
+        grp = pd.DataFrame({
+            'ano': mov['ano'].fillna(datetime.date.today().year),
+            'mes': mov['mes'],
+            'concepto': concepto,
+            'valor': mov['valor'],
+        })[mask].groupby(['ano', 'mes', 'concepto'], as_index=False, sort=True)['valor'].sum()
+        grp = grp[grp['valor'] != 0].reset_index(drop=True)
+
+        if grp.empty:
+            return mov[~mask].reset_index(drop=True)
+
+        fin_mes = pd.to_datetime(pd.DataFrame({
+            'year': grp['ano'].astype(int),
+            'month': grp['mes'].astype(int),
+            'day': 1
+        })) + pd.offsets.MonthEnd(0)
+
+        consolidado = pd.DataFrame({
+            'tipo': self.TIPO_BANCARIOS,
+            'ano': fin_mes.dt.year,
+            'mes': fin_mes.dt.month,
+            'dia': fin_mes.dt.day,
+            'desc': "",
+            'detalle': grp['concepto'] + " " + fin_mes.dt.month.map(lambda m: self.MESES[m - 1]) + " " + fin_mes.dt.year.astype(str),
+            'tercero': nit_empresa,
+            'valor': grp['valor'],
+            'codpuc_contra': grp['concepto'].map(self.CODPUC_BANCARIOS).fillna(""),
+        })
+
+        return pd.concat([mov[~mask], consolidado], ignore_index=True)
+
+    def _agrupar_nomina(self, mov, nit_empresa):
+        mask = (mov['tipo'] == "") & mov['detalle'].str.contains(self.PATRON_NOMINA, case=False, regex=True, na=False)
+        if not mask.any():
+            return mov
+
+        agrupado = (
+            mov[mask]
+            .groupby(['ano', 'mes', 'dia'], as_index=False, dropna=False)['valor'].sum()
+            .assign(
+                tipo=self.TIPO_NOMINA,
+                desc="",
+                detalle=self.DETALLE_NOMINA,
+                tercero=nit_empresa,
+                codpuc_contra="",
+            )
+        )
+        agrupado = agrupado[agrupado['valor'] != 0]
+
+        return pd.concat([mov[~mask], agrupado], ignore_index=True)
+
+    def _asignar_tipos_generales(self, mov):
+        pendiente = mov['tipo'] == ""
+        mov.loc[pendiente, 'tipo'] = np.where(
+            mov.loc[pendiente, 'valor'] < 0, self.TIPO_EGRESO, self.TIPO_RECIBO
+        )
+        return mov
+
+    def _asignar_codpuc(self, mov, en_debito, es_natural):
+        es_bancario = mov['tipo'] == self.TIPO_BANCARIOS
+        clase = mov['tipo'].str[:2]
+        return np.select(
+            [
+                es_bancario & es_natural,
+                es_bancario,
+                (clase == "EG") & en_debito,
+                (clase == "RC") & ~en_debito,
+            ],
+            [mov['codpuc_contra'], self.CODPUC_BANCO, self.CODPUC_PROVEEDORES, self.CODPUC_CLIENTES],
+            default=self.CODPUC_BANCO,
+        )
+
+    def _construir_lineas(self, mov, en_debito, es_natural):
+        importe = mov['valor'].abs()
+        return pd.DataFrame({
+            'tipo': mov['tipo'],
+            'numero': mov['numero'],
+            'ano': self._entero_o_vacio(mov['ano']),
+            'mes': self._entero_o_vacio(mov['mes']),
+            'dia': self._entero_o_vacio(mov['dia']),
+            'detalle': mov['detalle'],
+            'codpuc': self._asignar_codpuc(mov, en_debito, es_natural),
+            'tercero': mov['tercero'],
+            'debito': importe.where(en_debito, ""),
+            'credito': importe.where(~en_debito, ""),
+        })
+
+    def _generar_lineas(self, mov, numero_inicial):
+        mov = mov.sort_values(['ano', 'mes', 'dia'], kind='stable', na_position='last').reset_index(drop=True)
+        mov['numero'] = [f"{n:010d}" for n in range(numero_inicial, numero_inicial + len(mov))]
+
+        salida = mov['valor'] < 0
+        es_bancario = mov['tipo'] == self.TIPO_BANCARIOS
+        en_debito = pd.Series(np.where(es_bancario, salida, ~salida), index=mov.index)
+        doble = mov['tipo'] != self.TIPO_NOMINA
+
+        natural = self._construir_lineas(mov, en_debito, True)
+        contrapartida = self._construir_lineas(mov[doble], ~en_debito[doble], False)
+
+        lineas = pd.concat([natural, contrapartida])
+        lineas = (
+            lineas.assign(_comprobante=lineas.index, _credito=lineas['debito'].eq(""))
+            .sort_values(['_comprobante', '_credito'], kind='stable')
+            .drop(columns=['_comprobante', '_credito'])
+            .reset_index(drop=True)
+        )
+        return lineas.reindex(columns=self.COLUMNAS_PLANO, fill_value="")
+
     def _convertir_a_excel_95(self, ruta_xlsx, ruta_xls):
         try:
-            pythoncom.CoInitialize() 
+            pythoncom.CoInitialize()
             excel = win32.DispatchEx('Excel.Application')
             excel.Visible = False
             excel.DisplayAlerts = False
-            
+
             ruta_abs_xlsx = os.path.abspath(ruta_xlsx)
             ruta_abs_xls = os.path.abspath(ruta_xls)
-            
+
             wb = excel.Workbooks.Open(ruta_abs_xlsx)
             wb.SaveAs(ruta_abs_xls, FileFormat=39)
             wb.Close(False)
             excel.Quit()
-            
+
             if os.path.exists(ruta_abs_xlsx):
                 os.remove(ruta_abs_xlsx)
-                
+
         except Exception as e:
             raise RuntimeError(f"Fallo en la conversión a formato 5.0/95: {e}")
         finally:
             pythoncom.CoUninitialize()
 
-    def _consolidar_bancarios(self, df_plano, desc, valores_numericos, nit_empresa):
-        desc_upper = desc.str.upper()
-        concepto = pd.Series("", index=df_plano.index)
-        for nombre, patron in self.CONCEPTOS_BANCARIOS:
-            coincide = desc_upper.str.contains(patron, regex=True, na=False)
-            concepto = concepto.mask((concepto == "") & coincide, nombre)
-
-        ano_num = pd.to_numeric(df_plano['ano'], errors='coerce')
-        mes_num = pd.to_numeric(df_plano['mes'], errors='coerce')
-        
-        # CORRECCIÓN: Si el año no existe o es un error (ej. "1"), usar el año actual para no quebrar el motor
-        ano_valido = np.where((ano_num.isna()) | (ano_num < 2000), datetime.datetime.now().year, ano_num)
-        
-        mask_banc = (concepto != "") & mes_num.between(1, 12)
-
-        if not mask_banc.any():
-            return df_plano
-
-        grp = pd.DataFrame({
-            'ano_calc': ano_valido, # Usamos la columna corregida para el cálculo
-            'mes': mes_num,
-            'concepto': concepto, 
-            'valor': valores_numericos
-        })[mask_banc]
-        
-        grp = grp.groupby(['ano_calc', 'mes', 'concepto'], as_index=False, sort=True)['valor'].sum()
-        grp = grp[grp['valor'] != 0].reset_index(drop=True)
-
-        fin_mes = pd.to_datetime(pd.DataFrame({
-            'year': grp['ano_calc'].astype(int),
-            'month': grp['mes'].astype(int),
-            'day': 1
-        })) + pd.offsets.MonthEnd(0)
-
-        neg = grp['valor'] < 0
-        consolidado = pd.DataFrame({
-            'tipo': self.TIPO_BANCARIOS,
-            'ano': fin_mes.dt.year.astype(str),
-            'mes': fin_mes.dt.month,
-            'dia': fin_mes.dt.day,
-            'detalle': grp['concepto'] + " " + fin_mes.dt.month.map(lambda m: self.MESES[m - 1]) + " " + fin_mes.dt.year.astype(str),
-            'codpuc': grp['concepto'].map(self.CODPUC_BANCARIOS).fillna(""),
-            'tercero': str(nit_empresa).strip(),
-            'debito': np.where(neg, grp['valor'].abs(), ""),
-            'credito': np.where(~neg, grp['valor'].abs(), ""),
-        }).reindex(columns=self.COLUMNAS_PLANO, fill_value="")
-
-        return pd.concat([df_plano[~mask_banc], consolidado], ignore_index=True)
-
     def generar(self, numero_inicial="1", nit_empresa="", ruta_destino_final=None):
         if not ruta_destino_final:
-            base, ext = os.path.splitext(self.ruta_origen)
+            base, _ = os.path.splitext(self.ruta_origen)
             ruta_destino_final = f"{base}_PLANO.xls"
 
         try:
@@ -136,133 +274,24 @@ class GeneradorArchivoPlano:
         except ValueError:
             raise ValueError("El archivo seleccionado no contiene la hoja 'Datos'.")
 
-        df_plano = pd.DataFrame(columns=self.COLUMNAS_PLANO)
-
-        filas_totales = len(df)
-        if filas_totales == 0:
+        if df.empty:
             return ruta_destino_final
 
-        # 1. Procesar Valores y Tipos Base
-        valores_numericos = self._limpiar_y_convertir_valores(df)
-        es_negativo = valores_numericos < 0
-        
-        df_plano['tipo'] = np.where(es_negativo, 'RC1', 'EG1')
-        df_plano['credito'] = np.where(es_negativo, valores_numericos.abs(), "")
-        df_plano['debito'] = np.where(~es_negativo, valores_numericos.abs(), "")
-
-        # 2. Procesar Fechas
-# 2. Procesar Fechas
-        if 'FECHA' in df.columns:
-            fechas_dt = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True, format="mixed")
-            serie_fechas_str = df['FECHA'].astype(str)
-            
-            # Respaldo de extracción directa para formatos cortos "1/08"
-            fallback_dia = serie_fechas_str.str.extract(r'^(\d{1,2})')[0]
-            fallback_mes = serie_fechas_str.str.extract(r'[/.-](\d{1,2})')[0]
-            fallback_ano = serie_fechas_str.str.extract(r'[/.-]\d{1,2}[/.-](\d{4})')[0]
-            
-            df_plano['dia'] = fechas_dt.dt.day.fillna(fallback_dia).fillna("")
-            df_plano['mes'] = fechas_dt.dt.month.fillna(fallback_mes).fillna("")
-            
-            anos_extraidos = fechas_dt.dt.year.replace(1900, np.nan)
-            ano_final = anos_extraidos.fillna(fallback_ano).fillna(0)
-            
-            # CORRECCIÓN: Filtra cualquier número que no sea un año válido de 4 dígitos
-            df_plano['ano'] = pd.to_numeric(ano_final, errors='coerce').fillna(0).astype(int)
-            df_plano['ano'] = df_plano['ano'].apply(lambda x: str(x) if x >= 2000 else "")
-        
-        desc = df.get("DESCRIPCIÓN", df.get("DESCRIPCION", pd.Series([""] * filas_totales))).astype(str).fillna("")
-        col_ref = next((col for col in ["REFERENCIA 1", "REFERENCIA", "DCTO."] if col in df.columns), None)
-        
-        if col_ref:
-            ref = df[col_ref].astype(str).fillna("").str.replace("nan", "")
-            df_plano['detalle'] = (desc + " " + ref).str.strip()
-            df_plano['tercero'] = ref.apply(self._es_tercero_valido)
-        else:
-            df_plano['detalle'] = desc.str.strip()
-            df_plano['tercero'] = "" # Aseguramos inicializarlo en vacío
-
-        # --- NUEVA LÓGICA: RELLENAR TERCEROS VACÍOS CON EL NIT ---
-        if nit_empresa:
-            nit_str = str(nit_empresa).strip()
-            # Reemplaza cualquier cadena vacía o valores nulos con el NIT ingresado
-            df_plano['tercero'] = df_plano['tercero'].replace("", nit_str).fillna(nit_str)
-        # ---------------------------------------------------------
-
-        df_plano.fillna("", inplace=True)
-        df_plano = self._consolidar_bancarios(df_plano, desc, valores_numericos, nit_empresa)
-
-
-# --- 4. REGLAS ESPECIALES PARA EMPRESA 900823072 ---
-        if "900823072" in str(self.ruta_origen):
-            # Identificar las filas que contienen "PAGO A NOMIN"
-            mask_nomin = df_plano['detalle'].str.contains("PAGO A NOMIN", na=False, case=False)
-
-            # Regla de Tipos: Los demás positivos pasan de EG1 a EG2
-            df_plano.loc[(df_plano['tipo'] == 'EG1') & (~mask_nomin), 'tipo'] = 'EG2'
-            # Forzamos los pagos de nómina a EG1 (independientemente de su signo original)
-            df_plano.loc[mask_nomin, 'tipo'] = 'EG1'
-
-            if mask_nomin.any():
-                df_nomin = df_plano[mask_nomin].copy()
-
-                # Convertir a flotantes para poder sumarlos matemáticamente
-                df_nomin['credito'] = pd.to_numeric(df_nomin['credito'], errors='coerce').fillna(0)
-                df_nomin['debito'] = pd.to_numeric(df_nomin['debito'], errors='coerce').fillna(0)
-
-                # Agrupar por año, mes y día, sumando los montos
-                agrupado = df_nomin.groupby(['ano', 'mes', 'dia'], as_index=False).agg({
-                    'libro': 'first',
-                    'tipo': 'first',
-                    'numero': 'first',
-                    'detalle': lambda x: "PAGO A NOMIN", # Limpiar descripciones residuales
-                    'anulado': 'first',
-                    'ccosto': 'first',
-                    'sccosto': 'first',
-                    'docrela': 'first',
-                    'cuota': 'first',
-                    'artrela': 'first',
-                    'artcant': 'first',
-                    'base': 'first',
-                    'base2': 'first',
-                    'fechaven': 'first',
-                    'area': 'first',
-                    'numexterno': 'first',
-                    'anexo': 'first',
-                    'bodega': 'first',
-                    'codpuc': 'first',
-                    'tercero': lambda x: str(nit_empresa).strip(), # <-- CORRECCIÓN AQUÍ: Fuerza el NIT de la empresa
-                    'debito': 'sum',
-                    'credito': 'sum',
-                    'nombre': 'first'
-                })
-
-                # Volver a colocar como vacíos los ceros que se hayan sumado sin sentido
-                agrupado['credito'] = agrupado['credito'].replace(0.0, "")
-                agrupado['debito'] = agrupado['debito'].replace(0.0, "")
-
-                # Remover las filas originales y anexar las agrupadas al final
-                df_plano = df_plano[~mask_nomin]
-                df_plano = pd.concat([df_plano, agrupado], ignore_index=True)
-        # ---------------------------------------------------
-
-        # --- 5. ASIGNACIÓN DEL CONSECUTIVO DE 10 DÍGITOS ---
-        # (Se calcula al final por si el número total de filas cambió por agrupación)
         try:
-            inicio_int = int(str(numero_inicial).strip() or "1")
+            inicio = int(str(numero_inicial).strip() or "1")
         except ValueError:
-            inicio_int = 1
+            inicio = 1
 
-        filas_finales = len(df_plano)
-        secuencia_numeros = range(inicio_int, inicio_int + filas_finales)
-        df_plano['numero'] = [f"{n:010d}" for n in secuencia_numeros]
-        # ---------------------------------------------------
+        nit_empresa = str(nit_empresa or "").strip()
 
-        df_plano.fillna("", inplace=True)
-        
+        mov = self._construir_movimientos(df, nit_empresa)
+        mov = self._consolidar_bancarios(mov, nit_empresa)
+        mov = self._agrupar_nomina(mov, nit_empresa)
+        mov = self._asignar_tipos_generales(mov)
+        df_plano = self._generar_lineas(mov, inicio)
+
         ruta_temp_xlsx = ruta_destino_final.replace(".xls", ".xlsx")
         df_plano.to_excel(ruta_temp_xlsx, index=False, engine='openpyxl')
-        
         self._convertir_a_excel_95(ruta_temp_xlsx, ruta_destino_final)
-        
+
         return ruta_destino_final

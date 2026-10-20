@@ -4,8 +4,8 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import pandas as pd
-from archivo_plano import GeneradorArchivoPlano  # <-- NUEVA IMPORTACIÓN
-from tkinter import simpledialog
+from dialogo_plano import generar_plano_con_dialogo
+
 def aplicar_estilos_segun_imagen(excel_path):
     """Aplica la estética exacta de la imagen:
 
@@ -240,42 +240,8 @@ class ClasificadorConceptos(tk.Toplevel):
             valores = self.tree.item(item, "values")
             nuevo_estado = "✅" if valores[0] == "🔲" else "🔲"
             self.tree.item(item, values=(nuevo_estado, valores[1]))
-    def _pedir_parametros_plano(self):
-        """Ventana emergente personalizada para pedir Consecutivo y NIT."""
-        dialogo = tk.Toplevel(self)
-        dialogo.title("Parámetros del Archivo Plano")
-        dialogo.geometry("350x220")
-        dialogo.transient(self)
-        dialogo.grab_set()
 
-        frame = ttk.Frame(dialogo, padding=20)
-        frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(frame, text="Número Consecutivo inicial:", font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 5))
-        var_consecutivo = tk.StringVar(value="1")
-        ttk.Entry(frame, textvariable=var_consecutivo, font=("Segoe UI", 10)).pack(fill=tk.X, pady=(0, 15))
-
-        ttk.Label(frame, text="NIT de la Empresa (Tercero por defecto):", font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 5))
-        var_nit = tk.StringVar(value="")
-        ttk.Entry(frame, textvariable=var_nit, font=("Segoe UI", 10)).pack(fill=tk.X, pady=(0, 20))
-
-        resultado = {"consec": "1", "nit": ""}
-
-        def confirmar():
-            resultado["consec"] = var_consecutivo.get()
-            resultado["nit"] = var_nit.get()
-            dialogo.destroy()
-
-        ttk.Button(frame, text="Confirmar y Generar", command=confirmar).pack(fill=tk.X)
-        
-        self.wait_window(dialogo)
-
-        # Validación: Si cierran la ventana o envían letras, forzar un "1" en consecutivo
-        consecutivo_final = resultado["consec"]
-        if not consecutivo_final or not consecutivo_final.isdigit():
-            consecutivo_final = "1"
-
-        return consecutivo_final, resultado["nit"].strip()
     def _aplicar_y_guardar(self):
         conceptos_seleccionados = set()
         for item in self.tree.get_children():
@@ -362,25 +328,7 @@ class ClasificadorConceptos(tk.Toplevel):
             )
 
             # --- NUEVA LÓGICA: VENTANA EMERGENTE Y GENERACIÓN DEL PLANO ---
-            from archivo_plano import GeneradorArchivoPlano
-
-            # 1. Llamar a nuestra ventana personalizada
-            consecutivo_str, nit_empresa_str = self._pedir_parametros_plano()
-
-            try:
-                generador = GeneradorArchivoPlano(self.excel_path)
-                # 2. Enviar ambos datos recolectados al motor del plano
-                ruta_plano = generador.generar(numero_inicial=consecutivo_str, nit_empresa=nit_empresa_str)
-                
-                messagebox.showinfo(
-                    "Archivo Plano", 
-                    f"El archivo plano se ha generado en:\n{ruta_plano}"
-                )
-            except Exception as e:
-                messagebox.showerror(
-                    "Error en Plano", 
-                    f"Falló la generación del archivo plano:\n{e}"
-                )
+            generar_plano_con_dialogo(self, self.excel_path)
             # --------------------------------------------------------------
 
             self.destroy()
@@ -391,25 +339,6 @@ class ClasificadorConceptos(tk.Toplevel):
                 "Error", f"No se pudo procesar el archivo Excel:\n{e}"
             )
     def _cancelar(self):
-        from archivo_plano import GeneradorArchivoPlano
-
-        # 1. Llamar a nuestra ventana personalizada
-        consecutivo_str, nit_empresa_str = self._pedir_parametros_plano()
-
-        try:
-            generador = GeneradorArchivoPlano(self.excel_path)
-            # 2. Enviar ambos datos recolectados al motor del plano
-            ruta_plano = generador.generar(numero_inicial=consecutivo_str, nit_empresa=nit_empresa_str)
-            
-            messagebox.showinfo(
-                "Archivo Plano", 
-                f"El archivo plano se ha generado en:\n{ruta_plano}"
-            )
-        except Exception as e:
-            messagebox.showerror(
-                "Error en Plano", 
-                f"Falló la generación del archivo plano:\n{e}"
-            )
-
+        generar_plano_con_dialogo(self, self.excel_path)
         self.destroy()
         self.callback_actualizar_gui(self.excel_path)

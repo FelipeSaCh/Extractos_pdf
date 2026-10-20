@@ -18,7 +18,7 @@ from ui_theme import (
     COLOR_CANVAS_BG,
     FONT_BUTTON,
 )
-
+from dialogo_plano import generar_plano_con_dialogo
 # Importación del backend de Banco de Bogotá
 try:
     from script_ban_bogota import ejecutar_proceso_exportacion as exportar_bogota
@@ -445,21 +445,7 @@ class PDFViewerApp:
         )
         if not file_path:
             return
-            
-        try:
-            # Importación local para no ralentizar el inicio de la app
-            from archivo_plano import GeneradorArchivoPlano 
-            
-            self.root.config(cursor="watch")
-            generador = GeneradorArchivoPlano(file_path)
-            ruta_plano = generador.generar()
-            self.root.config(cursor="")
-            
-            messagebox.showinfo("Éxito", f"Archivo plano generado correctamente en:\n{ruta_plano}")
-        except Exception as e:
-            self.root.config(cursor="")
-            messagebox.showerror("Error", f"No se pudo generar el archivo plano:\n{str(e)}")
-
+        generar_plano_con_dialogo(self.root, file_path)
     def _on_banco_seleccionado(self, event=None):
         seleccion = self.combo_bancos.get()
 
