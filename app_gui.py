@@ -222,7 +222,7 @@ class PDFViewerApp:
         self.btn_archivo_plano = ttk.Button(
             left_frame,
             text="🗄️ Generar Archivo Plano",
-            command=None,
+            command=self.generar_archivo_plano_manual,
             style="Primary.TButton",
             cursor="hand2",
             state=tk.DISABLED,

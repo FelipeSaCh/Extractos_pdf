@@ -4,6 +4,7 @@ import re
 import os
 import win32com.client as win32
 import pythoncom
+import datetime
 
 class GeneradorArchivoPlano:
     COLUMNAS_PLANO = [
@@ -12,6 +13,23 @@ class GeneradorArchivoPlano:
         "base2", "fechaven", "area", "numexterno", "anexo", "bodega", "codpuc",
         "tercero", "debito", "credito", "nombre"
     ]
+
+    # Orden = prioridad de coincidencia (IVA antes que TARJETA/SERVICIOS)
+    CONCEPTOS_BANCARIOS = [
+        ("GMF 4X1000", r"4\s*X\s*1\.?000"),
+        ("IVA", r"\bIVA\b"),
+        ("TARJETA DE CREDITO", r"TARJETA\s+DE\s+CR[EÉ]DITO"),
+        ("SERVICIOS", r"SERVICIOS"),
+    ]
+    CODPUC_BANCARIOS = {
+        "GMF 4X1000": "530595001",
+        "IVA": "530505002",
+        "TARJETA DE CREDITO": "530505003",
+        "SERVICIOS": "530505001",
+    }
+    TIPO_BANCARIOS = "NB1"
+    MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
+             "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
 
     def __init__(self, ruta_excel_origen):
         self.ruta_origen = ruta_excel_origen
@@ -59,6 +77,55 @@ class GeneradorArchivoPlano:
         finally:
             pythoncom.CoUninitialize()
 
+    def _consolidar_bancarios(self, df_plano, desc, valores_numericos, nit_empresa):
+        desc_upper = desc.str.upper()
+        concepto = pd.Series("", index=df_plano.index)
+        for nombre, patron in self.CONCEPTOS_BANCARIOS:
+            coincide = desc_upper.str.contains(patron, regex=True, na=False)
+            concepto = concepto.mask((concepto == "") & coincide, nombre)
+
+        ano_num = pd.to_numeric(df_plano['ano'], errors='coerce')
+        mes_num = pd.to_numeric(df_plano['mes'], errors='coerce')
+        
+        # CORRECCIÓN: Si el año no existe o es un error (ej. "1"), usar el año actual para no quebrar el motor
+        ano_valido = np.where((ano_num.isna()) | (ano_num < 2000), datetime.datetime.now().year, ano_num)
+        
+        mask_banc = (concepto != "") & mes_num.between(1, 12)
+
+        if not mask_banc.any():
+            return df_plano
+
+        grp = pd.DataFrame({
+            'ano_calc': ano_valido, # Usamos la columna corregida para el cálculo
+            'mes': mes_num,
+            'concepto': concepto, 
+            'valor': valores_numericos
+        })[mask_banc]
+        
+        grp = grp.groupby(['ano_calc', 'mes', 'concepto'], as_index=False, sort=True)['valor'].sum()
+        grp = grp[grp['valor'] != 0].reset_index(drop=True)
+
+        fin_mes = pd.to_datetime(pd.DataFrame({
+            'year': grp['ano_calc'].astype(int),
+            'month': grp['mes'].astype(int),
+            'day': 1
+        })) + pd.offsets.MonthEnd(0)
+
+        neg = grp['valor'] < 0
+        consolidado = pd.DataFrame({
+            'tipo': self.TIPO_BANCARIOS,
+            'ano': fin_mes.dt.year.astype(str),
+            'mes': fin_mes.dt.month,
+            'dia': fin_mes.dt.day,
+            'detalle': grp['concepto'] + " " + fin_mes.dt.month.map(lambda m: self.MESES[m - 1]) + " " + fin_mes.dt.year.astype(str),
+            'codpuc': grp['concepto'].map(self.CODPUC_BANCARIOS).fillna(""),
+            'tercero': str(nit_empresa).strip(),
+            'debito': np.where(neg, grp['valor'].abs(), ""),
+            'credito': np.where(~neg, grp['valor'].abs(), ""),
+        }).reindex(columns=self.COLUMNAS_PLANO, fill_value="")
+
+        return pd.concat([df_plano[~mask_banc], consolidado], ignore_index=True)
+
     def generar(self, numero_inicial="1", nit_empresa="", ruta_destino_final=None):
         if not ruta_destino_final:
             base, ext = os.path.splitext(self.ruta_origen)
@@ -84,15 +151,25 @@ class GeneradorArchivoPlano:
         df_plano['debito'] = np.where(~es_negativo, valores_numericos.abs(), "")
 
         # 2. Procesar Fechas
+# 2. Procesar Fechas
         if 'FECHA' in df.columns:
             fechas_dt = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True, format="mixed")
             serie_fechas_str = df['FECHA'].astype(str)
             
-            df_plano['dia'] = fechas_dt.dt.day.fillna(serie_fechas_str.str.extract(r'^(\d{1,2})')[0]).fillna("")
-            df_plano['mes'] = fechas_dt.dt.month.fillna(serie_fechas_str.str.extract(r'[/.-](\d{1,2})')[0]).fillna("")
+            # Respaldo de extracción directa para formatos cortos "1/08"
+            fallback_dia = serie_fechas_str.str.extract(r'^(\d{1,2})')[0]
+            fallback_mes = serie_fechas_str.str.extract(r'[/.-](\d{1,2})')[0]
+            fallback_ano = serie_fechas_str.str.extract(r'[/.-]\d{1,2}[/.-](\d{4})')[0]
+            
+            df_plano['dia'] = fechas_dt.dt.day.fillna(fallback_dia).fillna("")
+            df_plano['mes'] = fechas_dt.dt.month.fillna(fallback_mes).fillna("")
             
             anos_extraidos = fechas_dt.dt.year.replace(1900, np.nan)
-            df_plano['ano'] = anos_extraidos.fillna("").apply(lambda x: str(int(x)) if isinstance(x, float) and not pd.isna(x) else x)
+            ano_final = anos_extraidos.fillna(fallback_ano).fillna(0)
+            
+            # CORRECCIÓN: Filtra cualquier número que no sea un año válido de 4 dígitos
+            df_plano['ano'] = pd.to_numeric(ano_final, errors='coerce').fillna(0).astype(int)
+            df_plano['ano'] = df_plano['ano'].apply(lambda x: str(x) if x >= 2000 else "")
         
         desc = df.get("DESCRIPCIÓN", df.get("DESCRIPCION", pd.Series([""] * filas_totales))).astype(str).fillna("")
         col_ref = next((col for col in ["REFERENCIA 1", "REFERENCIA", "DCTO."] if col in df.columns), None)
@@ -113,8 +190,10 @@ class GeneradorArchivoPlano:
         # ---------------------------------------------------------
 
         df_plano.fillna("", inplace=True)
+        df_plano = self._consolidar_bancarios(df_plano, desc, valores_numericos, nit_empresa)
 
-        # --- 4. REGLAS ESPECIALES PARA EMPRESA 900823072 ---
+
+# --- 4. REGLAS ESPECIALES PARA EMPRESA 900823072 ---
         if "900823072" in str(self.ruta_origen):
             # Identificar las filas que contienen "PAGO A NOMIN"
             mask_nomin = df_plano['detalle'].str.contains("PAGO A NOMIN", na=False, case=False)
@@ -152,7 +231,7 @@ class GeneradorArchivoPlano:
                     'anexo': 'first',
                     'bodega': 'first',
                     'codpuc': 'first',
-                    'tercero': 'first',
+                    'tercero': lambda x: str(nit_empresa).strip(), # <-- CORRECCIÓN AQUÍ: Fuerza el NIT de la empresa
                     'debito': 'sum',
                     'credito': 'sum',
                     'nombre': 'first'
