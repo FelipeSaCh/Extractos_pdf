@@ -1,3 +1,4 @@
+#app_gui
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, simpledialog
@@ -53,6 +54,12 @@ except Exception as e:
     if _import_error_msg is None:
         _import_error_msg = str(e)
 
+try:
+    from script_seguridad_social import GeneradorSeguridadSocial
+    _import_ss_error_msg = None
+except Exception as e:
+    GeneradorSeguridadSocial = None
+    _import_ss_error_msg = str(e)
 class PDFViewerApp:
 
     def __init__(self, root: tk.Tk):
@@ -155,7 +162,8 @@ class PDFViewerApp:
                 "Bancolombia (Estándar)",
                 "Banco de Bogotá (Extractos PyME)",
                 "Nequi",
-                "Davivienda"
+                "Davivienda",
+                "Seguridad social",
             ],
             state="readonly",
             font=("Segoe UI", 10),
@@ -176,7 +184,15 @@ class PDFViewerApp:
             state=tk.DISABLED,
         )
         self.btn_extractos.pack(fill=tk.X, pady=6)
-
+        self.btn_seguridad_social = ttk.Button(
+            left_frame,
+            text="🧾 Cargar Planilla Seguridad Social",
+            command=lambda: self.cargar_y_procesar_pdf("SeguridadSocial"),
+            style="Primary.TButton",
+            cursor="hand2",
+            state=tk.DISABLED,
+        )
+        self.btn_seguridad_social.pack(fill=tk.X, pady=6)
         # Botón para Movimientos Persona Natural
         self.btn_movimientos_pn = ttk.Button(
             left_frame,
@@ -231,6 +247,7 @@ class PDFViewerApp:
         # Botones cuya disponibilidad depende del banco elegido arriba.
         self.botones_dependientes_banco = [
             self.btn_extractos,
+            self.btn_seguridad_social,
             self.btn_movimientos_pn,
             self.btn_movimientos_soc,
             self.btn_load_excel,
@@ -449,17 +466,17 @@ class PDFViewerApp:
     def _on_banco_seleccionado(self, event=None):
         seleccion = self.combo_bancos.get()
 
+        for btn in self.botones_dependientes_banco:
+            btn.config(state=tk.DISABLED)
+
         if seleccion.startswith("Bancolombia"):
             for btn in self.botones_dependientes_banco:
-                btn.config(state=tk.NORMAL)
-        elif seleccion.startswith("Banco de Bogotá") or seleccion.startswith("Nequi") or seleccion.startswith("Davivienda"):
-            # Comportamiento unificado: Desactivamos botones avanzados de Bancolombia, pero activamos Cargar PDF
-            for btn in self.botones_dependientes_banco:
-                btn.config(state=tk.DISABLED)
+                if btn is not self.btn_seguridad_social:
+                    btn.config(state=tk.NORMAL)
+        elif seleccion.startswith(("Banco de Bogotá", "Nequi", "Davivienda")):
             self.btn_extractos.config(state=tk.NORMAL)
-        else:
-            for btn in self.botones_dependientes_banco:
-                btn.config(state=tk.DISABLED)
+        elif seleccion.startswith("Seguridad social"):
+            self.btn_seguridad_social.config(state=tk.NORMAL)
 
     def abrir_clasificador(self):
         ruta_excel = getattr(self.pdf_engine, "last_excel_path", None)
@@ -576,6 +593,7 @@ class PDFViewerApp:
                 "movimientos_",
                 "movimientospnatural_",
                 "movimientosoc_",
+                "seguridadsocial_",
             ]
 
             ya_tiene_prefijo = any(
@@ -716,6 +734,23 @@ class PDFViewerApp:
             f"No se pudo renderizar el PDF:\n{str(error)}",
         )
 
+    def _procesar_seguridad_social(self):
+        if GeneradorSeguridadSocial is None:
+            messagebox.showerror(
+                "Error de Módulo",
+                f"No se pudo importar 'script_seguridad_social.py':\n{_import_ss_error_msg}",
+            )
+            return
+        pdf_path = self.pdf_engine.current_path
+        ruta = generar_plano_con_dialogo(
+            self.root, pdf_path, generador=GeneradorSeguridadSocial(pdf_path), confirmar=False, pedir_ruta=True
+        )
+        if not ruta:
+            return
+        self.pdf_engine.last_excel_path = ruta
+        self.btn_open_excel.config(state=tk.NORMAL, style="Secondary.TButton")
+        self.info_label.config(text=f"✅ Plano generado:\n{os.path.basename(ruta)}", style="Status.TLabel")
+
     def process_pdf(self):
         if not self.pdf_engine.has_document:
             messagebox.showwarning("Atención", "Carga un archivo PDF primero.")
@@ -724,6 +759,8 @@ class PDFViewerApp:
         banco_seleccionado = (
             self.combo_bancos.get() if hasattr(self, "combo_bancos") else ""
         )
+        if banco_seleccionado.startswith("Seguridad social"):
+            return self._procesar_seguridad_social()
         usa_bogota = banco_seleccionado.startswith("Banco de Bogotá")
         usa_nequi = banco_seleccionado.startswith("Nequi")
         usa_bancolombia = banco_seleccionado.startswith("Bancolombia")

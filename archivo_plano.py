@@ -1,3 +1,4 @@
+#archivo_plano.py
 import pandas as pd
 import numpy as np
 import re
@@ -41,6 +42,7 @@ class GeneradorArchivoPlano:
     CODPUC_NOMINA = "250505001"
     CODPUC_GASTO_BANCARIO = "530505001"
     CODPUC_RETIROS = "110505001"
+    CLAVE_CONSECUTIVO="consecutivo"
     PATRON_RETIROS = r"\bRETIROS?\b"
 
     CLASE_EGRESO = "EGRESO"
@@ -100,16 +102,29 @@ class GeneradorArchivoPlano:
             vacio = pd.Series(np.nan, index=df.index)
             return vacio, vacio.copy(), vacio.copy()
 
-        fechas_dt = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True, format="mixed")
-        texto = df['FECHA'].astype(str)
+        partes = pd.DataFrame(df['FECHA'].map(self._partes_fecha).tolist(),
+                              columns=['ano', 'mes', 'dia'], index=df.index, dtype=float)
+        valida = partes['mes'].between(1, 12) & partes['dia'].between(1, 31)
+        partes = partes.where(valida)
+        ano = partes['ano'].where(partes['ano'] >= 2000)
+        partes['ano'] = ano.mask(valida & ano.isna(), datetime.date.today().year)
+        return partes['ano'], partes['mes'], partes['dia']
 
-        dia = pd.to_numeric(fechas_dt.dt.day.fillna(texto.str.extract(r'^(\d{1,2})')[0]), errors='coerce')
-        mes = pd.to_numeric(fechas_dt.dt.month.fillna(texto.str.extract(r'[/.-](\d{1,2})')[0]), errors='coerce')
-        ano = pd.to_numeric(
-            fechas_dt.dt.year.replace(1900, np.nan).fillna(texto.str.extract(r'[/.-]\d{1,2}[/.-](\d{4})')[0]),
-            errors='coerce'
-        )
-        return ano.where(ano >= 2000), mes, dia
+    @staticmethod
+    def _partes_fecha(valor):
+        if valor is None or (not isinstance(valor, str) and pd.isna(valor)):
+            return np.nan, np.nan, np.nan
+        if isinstance(valor, (datetime.date, pd.Timestamp)):
+            return valor.year, valor.month, valor.day
+        texto = f"{valor:.2f}" if isinstance(valor, float) else str(valor).strip()
+        m = re.match(r'^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})', texto)
+        if m:
+            return int(m[1]), int(m[2]), int(m[3])
+        m = re.match(r'^(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2}|\d{4}))?(?!\d)', texto)
+        if m:
+            ano = int(m[3]) if m[3] else np.nan
+            return (ano + 2000 if ano < 100 else ano) if m[3] else np.nan, int(m[2]), int(m[1])
+        return np.nan, np.nan, np.nan
 
     def _construir_movimientos(self, df):
         n = len(df)
@@ -320,6 +335,7 @@ class GeneradorArchivoPlano:
             'numero': df['numero'],
             'ano': self._entero_o_vacio(df['ano']),
             'mes': self._entero_o_vacio(df['mes']),
+            'nombre': df['nombre'] if 'nombre' in df.columns else "",
             'dia': self._entero_o_vacio(df['dia']),
             'detalle': df['detalle'],
             'codpuc': df['codpuc'],
@@ -329,7 +345,7 @@ class GeneradorArchivoPlano:
             'credito': df['credito'].astype(object).where(df['credito'].notna(), ""),
         }).reindex(columns=self.COLUMNAS_PLANO, fill_value="")
 
-        ruta_temp_xlsx = ruta_destino_final.replace(".xls", ".xlsx")
+        ruta_temp_xlsx = os.path.splitext(ruta_destino_final)[0] + ".xlsx"
         df_plano.to_excel(ruta_temp_xlsx, index=False, engine='openpyxl')
         self._convertir_a_excel_95(ruta_temp_xlsx, ruta_destino_final)
 

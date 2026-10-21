@@ -1,3 +1,4 @@
+#script.py (extractor de informacion del extracto bancario)
 import os
 import re
 import sys

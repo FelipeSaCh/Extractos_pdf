@@ -1,8 +1,10 @@
+#dialogo_plano.py
 import json
 import os
 import re
+import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import pandas as pd
 
@@ -12,6 +14,7 @@ NOMBRES_CLASE = {
     "NOMINA": "Pagos de nómina",
     "RECIBO": "Recibos de caja",
     "BANCARIO": "Gastos/ingresos bancarios",
+    "SEGURIDAD_SOCIAL": "Seguridad social",
 }
 PATRON_TIPO = re.compile(r"^[A-Z0-9]{1,5}$")
 PATRON_CODPUC = re.compile(r"^\d{4,12}$")
@@ -55,12 +58,13 @@ class DialogoPlano(tk.Toplevel):
         ("detalle", "Detalle", 300, "w"),
         ("codpuc", "Cuenta contable", 110, "center"),
         ("tercero", "Tercero", 110, "center"),
+        ("nombre", "Nombre", 200, "w"),
         ("debito", "Débito", 110, "e"),
         ("credito", "Crédito", 110, "e"),
         ("docrela", "Docrela", 90, "center"),
     )
     EDITABLES = {"tipo": "Comprobante", "codpuc": "Cuenta contable", "tercero": "Tercero", "docrela": "Docrela"}
-    BUSQUEDA = ("detalle", "tipo", "codpuc", "tercero", "docrela")
+    BUSQUEDA = ("detalle", "tipo", "codpuc", "tercero", "nombre", "docrela")
 
     def __init__(self, parent, generador, lin):
         super().__init__(parent)
@@ -72,6 +76,7 @@ class DialogoPlano(tk.Toplevel):
 
         self.gen = generador
         self.lin = lin
+        self._clave_consec = getattr(generador, "CLAVE_CONSECUTIVO", "consecutivo")
         self.predeterminados = dict(generador.COMPROBANTES_PREDETERMINADOS)
         self.tipo_clase = dict(self.predeterminados)
         self.cfg = _cargar_config()
@@ -79,7 +84,7 @@ class DialogoPlano(tk.Toplevel):
         self.nit_aplicado = None
         self._pendiente = None
 
-        self.var_nit = tk.StringVar(value=self.cfg.get("ultimo_nit", ""))
+        self.var_nit = tk.StringVar(value=getattr(generador, "nit_empresa", "") or self.cfg.get("ultimo_nit", ""))
         self.var_consec = tk.StringVar(value="1")
         self.vars_clase = {c: tk.StringVar(value=t) for c, t in self.tipo_clase.items()}
         self.var_buscar = tk.StringVar()
@@ -133,8 +138,9 @@ class DialogoPlano(tk.Toplevel):
             self.lbl_conteo[clase] = ttk.Label(frm_clases, foreground="gray")
             self.lbl_conteo[clase].grid(row=r, column=2, sticky="e")
             self.cmb_clase[clase] = cmb
-        ttk.Button(frm_clases, text="Pasar retiros a CC", command=self._pasar_retiros).grid(
-            row=len(self.predeterminados), column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        if self.gen.CLASE_BANCARIO in self.predeterminados:
+            ttk.Button(frm_clases, text="Pasar retiros a CC", command=self._pasar_retiros).grid(
+                row=len(self.predeterminados), column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
         frm_consec = ttk.LabelFrame(izq, text="Consecutivo", padding=10)
         frm_consec.pack(fill=tk.X, pady=(10, 0))
@@ -219,6 +225,10 @@ class DialogoPlano(tk.Toplevel):
             self.after_cancel(self._pendiente)
         self._pendiente = self.after(150, self._refrescar)
 
+    def _calcular(self, primer=None):
+        calc = self.gen.calcular(self.lin, self.var_nit.get().strip(), primer or self._primer() or 1)
+        return calc if "nombre" in calc.columns else calc.assign(nombre="")
+
     def _aplicar_nit(self, _=None):
         nit = self.var_nit.get().strip()
         if nit == self.nit_aplicado:
@@ -228,7 +238,7 @@ class DialogoPlano(tk.Toplevel):
         clases = empresa.get("clases", {})
         for clase, defecto in self.predeterminados.items():
             self._cambiar_clase(clase, clases.get(clase, defecto))
-        self.var_consec.set(str(empresa.get("consecutivo", 1)))
+        self.var_consec.set(str(empresa.get(self._clave_consec, 1)))
         self._refrescar()
 
     def _cambiar_clase(self, clase, nuevo=None):
@@ -246,7 +256,7 @@ class DialogoPlano(tk.Toplevel):
     def _refrescar(self, ver=None):
         self._pendiente = None
         primer = self._primer()
-        calc = self.gen.calcular(self.lin, self.var_nit.get().strip(), primer or 1)
+        calc = self._calcular(primer)
         n = calc["mov"].nunique()
         self.var_rango.set(f"{n} comprobantes → hasta {primer + n - 1}" if primer else f"{n} comprobantes · consecutivo inválido")
 
@@ -268,19 +278,19 @@ class DialogoPlano(tk.Toplevel):
         if texto:
             coincide = pd.Series(False, index=vista.index)
             for col in self.BUSQUEDA:
-                coincide |= vista[col].str.contains(texto, case=False, regex=False, na=False)
+                coincide |= vista[col].astype(str).str.contains(texto, case=False, regex=False, na=False)
             vista = vista[coincide]
 
         seleccion = set(self.tree.selection())
         posicion = self.tree.yview()[0]
         self.tree.delete(*self.tree.get_children())
-        for i, tipo, num, ano, mes, dia, det, cod, ter, deb, cre, doc in zip(
+        for i, tipo, num, ano, mes, dia, det, cod, ter, nom, deb, cre, doc in zip(
             vista.index, vista["tipo"], vista["numero"], vista["ano"], vista["mes"], vista["dia"], vista["detalle"],
-            vista["codpuc"], vista["tercero"], vista["debito"], vista["credito"], vista["docrela"],
+            vista["codpuc"], vista["tercero"], vista["nombre"], vista["debito"], vista["credito"], vista["docrela"],
         ):
             tags = (("par",) if par[i] else ()) + (("manual",) if manual[i] else ())
             self.tree.insert("", tk.END, iid=str(i), tags=tags, values=(
-                tipo, num, _fecha(ano, mes, dia), det, cod, ter, _moneda(deb), _moneda(cre), doc,
+                tipo, num, _fecha(ano, mes, dia), det, cod, ter, nom, _moneda(deb), _moneda(cre), doc,
             ))
 
         self.tree.selection_set([s for s in seleccion if self.tree.exists(s)])
@@ -408,11 +418,15 @@ class DialogoPlano(tk.Toplevel):
         if not primer:
             self._avisar("Consecutivo inválido", "Ingrese un primer consecutivo válido.")
             return
+        if self._calcular(primer)["codpuc"].eq("").any():
+            self._avisar("Cuenta faltante", "Existen líneas sin cuenta contable. Asígnela con doble clic en 'Cuenta contable'.")
+            return
         self.resultado = {
             "lin": self.lin,
             "consecutivo": primer,
             "nit": self.var_nit.get().strip(),
             "clases": dict(self.tipo_clase),
+            "clave": self._clave_consec,
         }
         self.destroy()
 
@@ -421,32 +435,73 @@ def _guardar_parametros(resultado):
     cfg = _cargar_config()
     empresa = cfg.setdefault("empresas", {}).setdefault(resultado["nit"], {})
     empresa.pop("consecutivos", None)
-    empresa["clases"] = resultado["clases"]
-    empresa["consecutivo"] = resultado["consecutivo"] + int(resultado["lin"]["mov"].nunique())
+    empresa.setdefault("clases", {}).update(resultado["clases"])
+    empresa[resultado.get("clave", "consecutivo")] = resultado["consecutivo"] + int(resultado["lin"]["mov"].nunique())
     cfg["ultimo_nit"] = resultado["nit"]
     _guardar_config(cfg)
 
 
-def generar_plano_con_dialogo(parent, excel_path):
-    if not messagebox.askyesno("Archivo Plano", "¿Desea ejecutar el archivo plano?", parent=parent):
+def _con_carga(parent, texto, funcion):
+    res = {}
+
+    def trabajo():
+        try:
+            res["ok"] = funcion()
+        except Exception as e:
+            res["error"] = e
+
+    ven = tk.Toplevel(parent)
+    ven.title("Archivo Plano")
+    ven.transient(parent)
+    ven.resizable(False, False)
+    ven.protocol("WM_DELETE_WINDOW", lambda: None)
+    ttk.Label(ven, text=texto, font=FUENTE, padding=(20, 15, 20, 8)).pack()
+    barra = ttk.Progressbar(ven, mode="indeterminate", length=300)
+    barra.pack(padx=20, pady=(0, 18))
+    barra.start(10)
+    ven.update_idletasks()
+    x = parent.winfo_rootx() + (parent.winfo_width() - ven.winfo_width()) // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - ven.winfo_height()) // 2
+    ven.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    ven.grab_set()
+
+    hilo = threading.Thread(target=trabajo, daemon=True)
+    hilo.start()
+
+    def revisar():
+        if hilo.is_alive():
+            ven.after(100, revisar)
+        else:
+            barra.stop()
+            ven.destroy()
+
+    ven.after(100, revisar)
+    parent.wait_window(ven)
+    if "error" in res:
+        raise res["error"]
+    return res.get("ok")
+
+
+def generar_plano_con_dialogo(parent, excel_path, generador=None, confirmar=True, pedir_ruta=False):
+    if confirmar and not messagebox.askyesno("Archivo Plano", "¿Desea ejecutar el archivo plano?", parent=parent):
         return None
 
-    from archivo_plano import GeneradorArchivoPlano
+    if generador is None:
+        from archivo_plano import GeneradorArchivoPlano
+        generador = GeneradorArchivoPlano(excel_path)
 
-    generador = GeneradorArchivoPlano(excel_path)
     try:
-        parent.config(cursor="watch")
-        parent.update_idletasks()
-        lin = generador.preparar()
+        lin = _con_carga(parent, "Leyendo documento y preparando movimientos...", generador.preparar)
     except Exception as e:
         messagebox.showerror("Error en Plano", f"No fue posible leer los movimientos:\n{e}", parent=parent)
         return None
-    finally:
-        parent.config(cursor="")
 
-    if lin.empty:
+    if lin is None or lin.empty:
         messagebox.showinfo("Archivo Plano", "El archivo no contiene movimientos con valor.", parent=parent)
         return None
+
+    if getattr(generador, "advertencias", None):
+        messagebox.showwarning("Archivo Plano", "\n\n".join(generador.advertencias), parent=parent)
 
     dialogo = DialogoPlano(parent, generador, lin)
     parent.wait_window(dialogo)
@@ -454,19 +509,35 @@ def generar_plano_con_dialogo(parent, excel_path):
     if not resultado:
         return None
 
+    ruta_destino = None
+    if pedir_ruta:
+        base = os.path.splitext(os.path.basename(excel_path))[0]
+        ruta_destino = filedialog.asksaveasfilename(
+            parent=parent,
+            title="Guardar archivo plano como...",
+            initialdir=os.path.dirname(excel_path),
+            initialfile=f"{base}_PLANO.xls",
+            defaultextension=".xls",
+            filetypes=[("Excel 5.0/95", "*.xls")],
+        )
+        if not ruta_destino:
+            return None
+        ruta_destino = os.path.normpath(ruta_destino)
+
     try:
-        parent.config(cursor="watch")
-        parent.update_idletasks()
-        ruta_plano = generador.generar(
+        ruta_plano = _con_carga(parent, "Generando archivo plano...", lambda: generador.generar(
             lin=resultado["lin"],
             nit_empresa=resultado["nit"],
             primer_consecutivo=resultado["consecutivo"],
-        )
+            ruta_destino_final=ruta_destino,
+        ))
     except Exception as e:
         messagebox.showerror("Error en Plano", f"Falló la generación del archivo plano:\n{e}", parent=parent)
         return None
-    finally:
-        parent.config(cursor="")
+
+    if not ruta_plano or not os.path.exists(ruta_plano):
+        messagebox.showerror("Error en Plano", f"No se encontró el archivo plano generado:\n{ruta_plano}", parent=parent)
+        return None
 
     _guardar_parametros(resultado)
     messagebox.showinfo("Archivo Plano", f"El archivo plano se ha generado en:\n{ruta_plano}", parent=parent)
