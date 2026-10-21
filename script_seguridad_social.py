@@ -19,6 +19,10 @@ PATRON_FECHA = re.compile(r"Fecha\s*:?\s*(\d{4})-(\d{1,2})-(\d{1,2})")
 PATRON_PLANILLA = re.compile(r"N[úu]mero\s+Planilla\s*:?\s*(\d+)", re.I)
 PATRON_NIT_EMPRESA = re.compile(r"^NIT\s+[A-Z]{1,2}\s*(\d{5,15})", re.M)
 PATRON_TOTAL = re.compile(r"Total\s+a\s+Pagar\s*:?\s*\$\s*([\d.,]+)", re.I)
+PATRON_PERIODO = re.compile(
+    r"Per[ií]odo\s+de\s+Cotizaci[oó]n\s+(?P<tipo>Otros\s+Riesgos|Para\s+Salud)\s*:?\s*(?P<mes>[A-Za-zÁÉÍÓÚáéíóúÑñ]+)",
+    re.I,
+)
 
 
 def _monto(txt):
@@ -103,6 +107,11 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
                 return cuentas[0]
         return ""
 
+    def _mes_periodo(self, texto, mes_fecha):
+        periodos = {_normalizar(m["tipo"]): _normalizar(m["mes"]) for m in PATRON_PERIODO.finditer(texto)}
+        nombre = periodos.get("OTROS RIESGOS") or periodos.get("PARA SALUD") or ""
+        return next((m for m in self.MESES if nombre and m[:3] == nombre[:3]), self.MESES[mes_fecha - 1])
+
     @staticmethod
     def _fila(cuenta, tercero, nombre, debito=np.nan, credito=np.nan):
         return {"codpuc_auto": cuenta, "tercero_ref": tercero, "nombre": nombre,
@@ -118,7 +127,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         ano, mes, dia = map(int, fecha.groups())
         nit_emp = PATRON_NIT_EMPRESA.search(texto)
         self.nit_empresa = nit_emp.group(1) if nit_emp else ""
-        detalle = f"PAGO SEGURIDAD SOCIAL {self.MESES[mes - 1]} PLANILLA {planilla.group(1)}"
+        detalle = f"PAGO SEGURIDAD SOCIAL {self._mes_periodo(texto, mes)} PLANILLA {planilla.group(1)}"
         self._adm = _cargar_administradoras(self.ruta_administradoras)
 
         filas, sin_cuenta, total = [], [], 0.0
