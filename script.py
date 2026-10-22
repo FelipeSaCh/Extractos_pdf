@@ -6,7 +6,7 @@ import pandas as pd
 import pdfplumber
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-
+import unicodedata
 DELIMITADOR = "|||"
 
 
@@ -14,10 +14,8 @@ DELIMITADOR = "|||"
 # FUNCIONES AUXILIARES COMUNES
 # ==============================================================================
 def obtener_ruta_asset(ruta_relativa):
-    """Obtiene la ruta absoluta para assets, funciona en desarrollo y en el .exe de PyInstaller."""
-    if hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, ruta_relativa)
-    return os.path.join(os.path.abspath("."), ruta_relativa)
+    """Ruta absoluta de assets en desarrollo y en el .exe de Nuitka."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), ruta_relativa)
 
 
 def es_numero_financiero(texto):
@@ -617,15 +615,16 @@ def reorganizar_excel(excel_path):
 
 def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_callback=None):
     """Detecta automáticamente el tipo de documento según el nombre del PDF."""
-    nombre_archivo = os.path.basename(pdf_path).upper()
+    nombre = re.sub(
+        r"[^A-Z]", "", os.path.splitext(os.path.basename(pdf_path))[0].upper()
+    )
+    es_movimiento = "MOVIMIENTO" in nombre or "MOVIMENTO" in nombre
 
-    if "MOVIMENTOSPNATURAL" in nombre_archivo or "MOVIMIENTOSPNATURAL" in nombre_archivo:
-        tipo = "MOVIMIENTOS_PNATURAL"
+    if es_movimiento and "NATURAL" in nombre:
         columnas = ["FECHA", "DESCRIPCIÓN", "REFERENCIA", "VALOR"]
         lineas_plana = extraer_lineas_movimientos_pn(pdf_path)
 
-    elif "MOVIMIENTOSOC" in nombre_archivo or "MOVIMIENTO" in nombre_archivo:
-        tipo = "MOVIMIENTOS_SOC"
+    elif es_movimiento:
         columnas = [
             "FECHA",
             "DESCRIPCIÓN",
@@ -637,8 +636,13 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_call
         ]
         lineas_plana = extraer_lineas_movimientos_soc(pdf_path)
 
-    elif "EXTRACTO" in nombre_archivo:
-        tipo = "EXTRACTOS"
+    elif es_movimiento:
+        raise ValueError(
+            "Archivo de movimientos sin tipo definido. Incluya 'PNatural' "
+            "o 'SOC' en el nombre del archivo."
+        )
+
+    elif "EXTRACTO" in nombre:
         columnas = [
             "FECHA",
             "DESCRIPCIÓN",
@@ -652,7 +656,7 @@ def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_call
     else:
         raise ValueError(
             "El nombre del archivo no coincide con un prefijo válido "
-            "('MovimientosPNatural', 'MovimientoSOC' o 'Extracto')."
+            "('MovimientosPNatural', 'MovimientosSOC' o 'Extracto')."
         )
 
     if not lineas_plana:

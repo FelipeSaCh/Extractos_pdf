@@ -8,11 +8,17 @@ __pycache__/
 
 # Archivos de salida y datos generados
 *.xlsx
+*.xls
 *.txt
 !requirements.txt
+*.pdf
 
-# PyInstaller y empaquetado
+# Empaquetado (Nuitka / Inno Setup)
 build/
 dist/
+instaladores/
+*.build/
+*.dist/
+*.onefile-build/
+nuitka-crash-report.xml
 *.spec
-

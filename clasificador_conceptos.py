@@ -1,3 +1,4 @@
+#clasificador conceptos.py
 import tkinter as tk
 from tkinter import messagebox, ttk
 import openpyxl

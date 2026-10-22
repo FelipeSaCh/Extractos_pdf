@@ -1,8 +1,8 @@
 #pdf_engine.py
 import os
 import tempfile
-import fitz  # PyMuPDF
-from PIL import Image
+import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
 
 
 class PDFPasswordRequiredError(Exception):
@@ -13,6 +13,10 @@ class PDFPasswordRequiredError(Exception):
 class PDFInvalidPasswordError(Exception):
     """Indica que la contraseña suministrada no es válida."""
     pass
+
+
+def _es_error_password(error):
+    return getattr(error, "err_code", None) == pdfium_c.FPDF_ERR_PASSWORD
 
 
 class PDFEngine:
@@ -71,34 +75,36 @@ class PDFEngine:
         self.last_excel_path = None
 
         try:
-            doc = fitz.open(path)
+            try:
+                doc = pdfium.PdfDocument(path)
+                protegido = False
+            except pdfium.PdfiumError as e:
+                if not _es_error_password(e):
+                    raise
 
-            # ---------------------------------------------------------
-            # PDF PROTEGIDO
-            # ---------------------------------------------------------
-            if doc.needs_pass:
-                # Todavía no se proporcionó contraseña.
+                # ---------------------------------------------------------
+                # PDF PROTEGIDO
+                # ---------------------------------------------------------
                 if password is None:
-                    doc.close()
-
                     raise PDFPasswordRequiredError(
                         "El PDF está protegido con contraseña."
-                    )
+                    ) from None
 
-                # Intentar autenticar.
-                autenticado = doc.authenticate(password)
+                try:
+                    doc = pdfium.PdfDocument(path, password=password)
+                except pdfium.PdfiumError as e2:
+                    if _es_error_password(e2):
+                        raise PDFInvalidPasswordError(
+                            "La contraseña ingresada no es correcta."
+                        ) from None
+                    raise
 
-                if not autenticado:
-                    doc.close()
+                protegido = True
 
-                    raise PDFInvalidPasswordError(
-                        "La contraseña ingresada no es correcta."
-                    )
-
+            if protegido:
                 # -----------------------------------------------------
                 # CREAR COPIA TEMPORAL SIN PROTECCIÓN
                 # -----------------------------------------------------
-                # Extraemos el nombre base sin extensión para conservarlo en el temporal
                 nombre_original = os.path.splitext(os.path.basename(path))[0]
                 prefix_temp = f"pdfengine_{nombre_original}_"
 
@@ -112,12 +118,7 @@ class PDFEngine:
                 temp_file.close()
 
                 try:
-                    doc.save(
-                        temp_path,
-                        encryption=fitz.PDF_ENCRYPT_NONE,
-                        garbage=4,
-                        deflate=True
-                    )
+                    doc.save(temp_path, flags=pdfium_c.FPDF_REMOVE_SECURITY)
 
                     doc.close()
                     doc = None
@@ -125,7 +126,7 @@ class PDFEngine:
                     self.temp_pdf_path = temp_path
 
                     # Abrimos nuevamente la copia ya desbloqueada.
-                    doc = fitz.open(temp_path)
+                    doc = pdfium.PdfDocument(temp_path)
 
                 except Exception:
                     if doc is not None:
@@ -165,27 +166,25 @@ class PDFEngine:
     def renderizar_paginas(self, zoom: float = 1.5, progreso_callback=None):
         """Genera las imágenes PIL de cada página del documento ya abierto.
 
-        Operación pesada (CPU-bound) pero thread-safe: no crea ni toca
-        ningún objeto de Tkinter, por lo que puede ejecutarse en un hilo
-        secundario. `progreso_callback(indice, total)` se invoca tras
-        renderizar cada página, si se proporciona.
+        Operación pesada (CPU-bound): no crea ni toca ningún objeto de
+        Tkinter, por lo que puede ejecutarse en un hilo secundario.
+        `progreso_callback(indice, total)` se invoca tras renderizar cada
+        página, si se proporciona.
         """
         if not self.has_document:
             raise ValueError("No hay un documento PDF abierto.")
 
         self.page_images.clear()
 
-        matrix = fitz.Matrix(zoom, zoom)
         total = len(self.doc)
 
-        for indice, page in enumerate(self.doc, start=1):
-            pix = page.get_pixmap(matrix=matrix)
-
-            img = Image.frombytes(
-                "RGB",
-                [pix.width, pix.height],
-                pix.samples
-            )
+        for indice in range(1, total + 1):
+            page = self.doc[indice - 1]
+            try:
+                bitmap = page.render(scale=zoom)
+                img = bitmap.to_pil().convert("RGB")
+            finally:
+                page.close()
 
             self.page_images.append(img)
 
@@ -240,7 +239,7 @@ class PDFEngine:
 
             self.doc = None
 
-        # Después de cerrar PyMuPDF podemos eliminar el temporal.
+        # Después de cerrar el documento podemos eliminar el temporal.
         self._eliminar_pdf_temporal()
 
         self.current_path = None

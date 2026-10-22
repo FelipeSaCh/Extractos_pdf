@@ -1,6 +1,6 @@
-streamlit
+
 pdfplumber
 openpyxl
 pandas
-pymupdf
+pypdfium2
 pillow

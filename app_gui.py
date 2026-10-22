@@ -995,10 +995,7 @@ class PDFViewerApp:
     def liberar_pdf(self):
         try:
             if hasattr(self, "pdf_engine") and self.pdf_engine:
-                if hasattr(self.pdf_engine, "current_path"):
-                    self.pdf_engine.current_path = None
-                if hasattr(self.pdf_engine, "last_pdf_path"):
-                    self.pdf_engine.last_pdf_path = None
+                self.pdf_engine.liberar_recursos()
 
             if hasattr(self, "current_pdf_path"):
                 self.current_pdf_path = None

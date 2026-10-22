@@ -19,11 +19,10 @@ DELIMITADOR = "|||"
 # ==============================================================================
 
 def obtener_ruta_asset(ruta_relativa):
-    """Obtiene la ruta absoluta para assets, funciona en desarrollo y PyInstaller."""
-    if hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, ruta_relativa)
+    """Ruta absoluta de assets en desarrollo y en el .exe de Nuitka."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), ruta_relativa)
 
-    return os.path.join(os.path.abspath("."), ruta_relativa)
+
 
 
 def es_numero_financiero(texto):
