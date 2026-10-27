@@ -1,4 +1,3 @@
-#app_gui
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, simpledialog
@@ -56,10 +55,10 @@ except Exception as e:
     if _import_error_msg is None:
         _import_error_msg = str(e)
 try:
-    from script_seguridad_social import GeneradorSeguridadSocial
+    from script_seguridad_social import GeneradorSeguridadSocial, GeneradorPlanillasMultiples
     _import_ss_error_msg = None
 except Exception as e:
-    GeneradorSeguridadSocial = None
+    GeneradorSeguridadSocial = GeneradorPlanillasMultiples = None
     _import_ss_error_msg = str(e)
 try:
     from script_aportes_en_linea import GeneradorAportesEnLinea
@@ -67,6 +66,17 @@ try:
 except Exception as e:
     GeneradorAportesEnLinea = None
     _import_ael_error_msg = str(e)
+
+ETIQUETAS_EXISTENTES = (
+    "extracto_",
+    "movimiento_",
+    "movimientos_",
+    "movimientospnatural_",
+    "movimientosoc_",
+    "seguridadsocial_",
+)
+
+
 class PDFViewerApp:
 
     def __init__(self, root: tk.Tk):
@@ -588,44 +598,36 @@ class PDFViewerApp:
     def _es_aportes_en_linea(self):
         return self.combo_bancos.get().endswith("(Aportes en Línea)")
 
-    def cargar_y_procesar_pdf(self, prefijo_tipo):
-        acepta_excel = prefijo_tipo == "SeguridadSocial" and self._es_aportes_en_linea()
-        file_path = filedialog.askopenfilename(
-            title=f"Seleccionar {'PDF o Excel' if acepta_excel else 'PDF'} de {prefijo_tipo}",
-            filetypes=[("PDF o Excel", "*.pdf;*.xlsx;*.xls")] if acepta_excel else [("Archivos PDF", "*.pdf")],
-        )
+    @staticmethod
+    def _con_prefijo(file_path, prefijo_tipo):
+        carpeta, nombre = os.path.split(file_path)
+        if nombre.lower().startswith(ETIQUETAS_EXISTENTES):
+            return file_path
+        nueva = os.path.join(carpeta, f"{prefijo_tipo}_{nombre}")
+        os.replace(file_path, nueva)
+        return nueva
 
-        if not file_path:
+    def cargar_y_procesar_pdf(self, prefijo_tipo):
+        es_ss = prefijo_tipo == "SeguridadSocial"
+        acepta_excel = es_ss and self._es_aportes_en_linea()
+        titulo = f"Seleccionar {'PDF o Excel' if acepta_excel else 'PDF'} de {prefijo_tipo}"
+        tipos = [("PDF o Excel", "*.pdf;*.xlsx;*.xls")] if acepta_excel else [("Archivos PDF", "*.pdf")]
+
+        if es_ss:
+            rutas = list(filedialog.askopenfilenames(title=f"{titulo} (puede elegir varias)", filetypes=tipos))
+        else:
+            ruta = filedialog.askopenfilename(title=titulo, filetypes=tipos)
+            rutas = [ruta] if ruta else []
+
+        if not rutas:
             return
 
         try:
-            folder_path, old_filename = os.path.split(file_path)
-            filename_lower = old_filename.lower()
+            rutas = [self._con_prefijo(r, prefijo_tipo) for r in rutas]
+            file_path = rutas[0]
 
-            prefijo_formateado = f"{prefijo_tipo}_"
-            etiquetas_existentes = [
-                "extracto_",
-                "movimiento_",
-                "movimientos_",
-                "movimientospnatural_",
-                "movimientosoc_",
-                "seguridadsocial_",
-            ]
-
-            ya_tiene_prefijo = any(
-                filename_lower.startswith(tag) for tag in etiquetas_existentes
-            )
-
-            if not ya_tiene_prefijo:
-                nuevo_nombre = f"{prefijo_formateado}{old_filename}"
-                new_file_path = os.path.join(folder_path, nuevo_nombre)
-
-                if file_path != new_file_path:
-                    os.replace(file_path, new_file_path)
-                    file_path = new_file_path
-
-            if acepta_excel and not file_path.lower().endswith(".pdf"):
-                self._procesar_seguridad_social(file_path)
+            if len(rutas) > 1 or (acepta_excel and not file_path.lower().endswith(".pdf")):
+                self._procesar_seguridad_social(rutas)
                 return
 
             self.current_pdf_path = file_path
@@ -767,20 +769,22 @@ class PDFViewerApp:
         except Exception as e:
             messagebox.showerror("Administradoras", f"No se pudo abrir administradoras.json:\n{e}")
 
-    def _procesar_seguridad_social(self, ruta_origen=None):
+    def _procesar_seguridad_social(self, rutas=None):
         if self._es_aportes_en_linea():
             clase, modulo, error = GeneradorAportesEnLinea, "script_aportes_en_linea.py", _import_ael_error_msg
         else:
             clase, modulo, error = GeneradorSeguridadSocial, "script_seguridad_social.py", _import_ss_error_msg
-        if clase is None:
+        if clase is None or GeneradorPlanillasMultiples is None:
             messagebox.showerror(
                 "Error de Módulo",
-                f"No se pudo importar '{modulo}':\n{error}",
+                f"No se pudo importar '{modulo}':\n{error or _import_ss_error_msg}",
             )
             return
-        pdf_path = ruta_origen or self.pdf_engine.current_path
+        rutas = rutas or [self.pdf_engine.current_path]
+        generadores = [clase(r) for r in rutas]
+        generador = generadores[0] if len(generadores) == 1 else GeneradorPlanillasMultiples(generadores)
         ruta = generar_plano_con_dialogo(
-            self.root, pdf_path, generador=clase(pdf_path), confirmar=False, pedir_ruta=True
+            self.root, rutas[0], generador=generador, confirmar=False, pedir_ruta=True
         )
         if not ruta:
             return

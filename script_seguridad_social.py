@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import unicodedata
 
@@ -186,11 +187,42 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         df["tipo"] = df["tipo"].fillna("").astype(str).str.strip().str.upper()
         df["codpuc"] = df["codpuc_manual"].where(df["codpuc_manual"] != "", df["codpuc_auto"])
         df["tercero"] = df["tercero_manual"].where(df["tercero_manual"] != "", df["tercero_ref"])
-        inicio = self._a_entero(primer_consecutivo)
-        df["numero"] = [f"{n:010d}" for n in pd.factorize(df["mov"])[0] + inicio]
+        movs = df.drop_duplicates("mov")[["mov", "tipo"]]
         if isinstance(primer_consecutivo, dict):
-            inicio = df["tipo"].map(lambda t: self._a_entero(primer_consecutivo.get(t, 1)))
+            inicio = movs["tipo"].map(lambda t: self._a_entero(primer_consecutivo.get(t, 1)))
         else:
             inicio = self._a_entero(primer_consecutivo)
-        df["numero"] = [f"{n:010d}" for n in pd.factorize(df["mov"])[0] + inicio]
+        numeros = inicio + movs.groupby("tipo").cumcount()
+        df["numero"] = df["mov"].map(dict(zip(movs["mov"], numeros))).map(lambda n: f"{int(n):010d}")
         return df
+
+
+class GeneradorPlanillasMultiples(GeneradorSeguridadSocial):
+    def __init__(self, generadores):
+        GeneradorArchivoPlano.__init__(self, generadores[0].ruta_origen)
+        self.generadores = generadores
+        self.nit_empresa = ""
+        self.advertencias = []
+
+    def preparar(self):
+        partes, nits, self.advertencias = [], set(), []
+        for mov, gen in enumerate(self.generadores):
+            nombre = os.path.basename(gen.ruta_origen)
+            try:
+                lin = gen.preparar()
+            except Exception as e:
+                raise ValueError(f"{nombre}:\n{e}") from e
+            partes.append(lin.assign(mov=mov))
+            self.advertencias += [f"{nombre}:\n{a}" for a in gen.advertencias]
+            if gen.nit_empresa:
+                nits.add(gen.nit_empresa)
+
+        if len(nits) > 1:
+            raise ValueError(f"Las planillas pertenecen a empresas diferentes (NIT {', '.join(sorted(nits))}).")
+        detalles = pd.concat(partes).drop_duplicates("mov")["detalle"]
+        repetidas = detalles[detalles.duplicated()].unique()
+        if len(repetidas):
+            raise ValueError("Planilla cargada más de una vez:\n- " + "\n- ".join(repetidas))
+
+        self.nit_empresa = next(iter(nits), "")
+        return pd.concat(partes, ignore_index=True)

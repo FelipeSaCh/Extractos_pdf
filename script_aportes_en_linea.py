@@ -1,4 +1,3 @@
-#script_aportes_en_linea.py
 import datetime
 import re
 
@@ -189,7 +188,6 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
             raise ValueError(f"La suma de aportes ({total:,.0f}) supera el valor pagado ({pagado:,.0f}).")
         if mora > 1:
             filas += self._con_contrapartida(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, mora)
-            filas.append(self._fila(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, debito=mora))
 
         self.advertencias = (
             ["Sin tercero o cuenta contable en administradoras.json:\n- " + "\n- ".join(sin_cuenta)] if sin_cuenta else []
