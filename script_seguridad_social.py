@@ -1,4 +1,3 @@
-#script_seguridad_social.py
 import json
 import re
 import unicodedata
@@ -76,6 +75,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
     NIT_ARUS = "900089104"
     NOMBRE_OPERADOR = "ENLACE OPERATIVO"
     CODPUC_INTERESES_MORA = "530520001"
+    CODPUC_CONTRAPARTIDA = "112005001"
 
     def __init__(self, ruta_pdf, ruta_administradoras=RUTA_ADMINISTRADORAS):
         super().__init__(ruta_pdf)
@@ -88,8 +88,13 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         with pdfplumber.open(self.ruta_origen) as pdf:
             return "\n".join(p.extract_text() or "" for p in pdf.pages)
 
-    def _buscar_cuenta(self, nit, nombre):
+    def _buscar_cuenta(self, cod, nit, nombre):
         adm = self._adm[self._adm["cuenta"] != ""]
+        cod = re.sub(r"\s", "", str(cod or "")).upper()
+        if cod:
+            cuentas = adm.loc[adm["codigo"] == cod, "cuenta"].unique()
+            if len(cuentas) == 1:
+                return cuentas[0]
         cand = adm[adm["nit"] == nit] if nit else adm.iloc[0:0]
         if cand["cuenta"].nunique() > 1:
             cand = cand[~cand["categoria"].str.contains("CESANT", na=False)]
@@ -118,6 +123,10 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         return {"codpuc_auto": cuenta, "tercero_ref": tercero, "nombre": nombre,
                 "debito": debito, "credito": credito}
 
+    def _con_contrapartida(self, cuenta, tercero, nombre, monto):
+        return [self._fila(cuenta, tercero, nombre, debito=monto),
+                self._fila(self.CODPUC_CONTRAPARTIDA, tercero, nombre, credito=monto)]
+
     def preparar(self):
         texto = self._leer_pdf()
         fecha = PATRON_FECHA.search(texto)
@@ -141,13 +150,13 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
             valor, mora = _monto(m["val"]), _monto(m["mora"])
             tercero = nit or self.NIT_ARUS
             nombre = adm or self.NIT_ARUS
-            cuenta = self._buscar_cuenta(nit, adm)
+            cuenta = self._buscar_cuenta(m["cod"], nit, adm)
             if not cuenta and valor:
                 sin_cuenta.append(adm or nit or m["cod"])
             if valor:
-                filas.append(self._fila(cuenta, tercero, nombre, debito=valor))
+                filas += self._con_contrapartida(cuenta, tercero, nombre, valor)
             if mora:
-                filas.append(self._fila(self.CODPUC_INTERESES_MORA, tercero, nombre, debito=mora))
+                filas += self._con_contrapartida(self.CODPUC_INTERESES_MORA, tercero, nombre, mora)
             total += valor + mora
 
         if not filas:
@@ -178,5 +187,10 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         df["codpuc"] = df["codpuc_manual"].where(df["codpuc_manual"] != "", df["codpuc_auto"])
         df["tercero"] = df["tercero_manual"].where(df["tercero_manual"] != "", df["tercero_ref"])
         inicio = self._a_entero(primer_consecutivo)
+        df["numero"] = [f"{n:010d}" for n in pd.factorize(df["mov"])[0] + inicio]
+        if isinstance(primer_consecutivo, dict):
+            inicio = df["tipo"].map(lambda t: self._a_entero(primer_consecutivo.get(t, 1)))
+        else:
+            inicio = self._a_entero(primer_consecutivo)
         df["numero"] = [f"{n:010d}" for n in pd.factorize(df["mov"])[0] + inicio]
         return df

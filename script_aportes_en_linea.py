@@ -177,10 +177,10 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
                 partes = [(cod, valor)]
             for codigo, monto in partes:
                 nit, nombre = self._administradora(codigo)
-                cuenta = self._buscar_cuenta(nit, nombre)
+                cuenta = self._buscar_cuenta(codigo, nit, nombre)
                 if not cuenta:
                     sin_cuenta.append(f"{grupo} {codigo} {nombre}".strip())
-                filas.append(self._fila(cuenta, nit, nombre or codigo, debito=monto))
+                filas += self._con_contrapartida(cuenta, nit, nombre or codigo, monto)
 
         total = sum(aportes.values())
         pagado = _valor(liq["valor"])
@@ -188,6 +188,7 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
         if mora < -1:
             raise ValueError(f"La suma de aportes ({total:,.0f}) supera el valor pagado ({pagado:,.0f}).")
         if mora > 1:
+            filas += self._con_contrapartida(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, mora)
             filas.append(self._fila(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, debito=mora))
 
         self.advertencias = (
