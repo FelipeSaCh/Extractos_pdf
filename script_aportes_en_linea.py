@@ -179,7 +179,7 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
                 cuenta = self._buscar_cuenta(codigo, nit, nombre)
                 if not cuenta:
                     sin_cuenta.append(f"{grupo} {codigo} {nombre}".strip())
-                filas += self._con_contrapartida(cuenta, nit, nombre or codigo, monto)
+                filas.append(self._fila(cuenta, nit, nombre or codigo, debito=monto))
 
         total = sum(aportes.values())
         pagado = _valor(liq["valor"])
@@ -187,14 +187,14 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
         if mora < -1:
             raise ValueError(f"La suma de aportes ({total:,.0f}) supera el valor pagado ({pagado:,.0f}).")
         if mora > 1:
-            filas += self._con_contrapartida(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, mora)
+            filas.append(self._fila(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, debito=mora))
 
         self.advertencias = (
             ["Sin tercero o cuenta contable en administradoras.json:\n- " + "\n- ".join(sin_cuenta)] if sin_cuenta else []
         )
 
         detalle = f"PAGO SEGURIDAD SOCIAL {self.MESES[int(liq['mp']) - 1]} PLANILLA {liq['planilla']}"
-        return pd.DataFrame(filas).assign(
+        return pd.DataFrame(self._con_contrapartida_total(filas)).assign(
             mov=0, clase=self.CLASE_SS, tipo=self.COMPROBANTES_PREDETERMINADOS[self.CLASE_SS],
             ano=int(liq["ano"]), mes=int(liq["mes"]), dia=int(liq["dia"]), detalle=detalle,
             codpuc_manual="", tercero_manual="", docrela="",

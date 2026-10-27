@@ -74,6 +74,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
     COMPROBANTES_PREDETERMINADOS = {CLASE_SS: "PS1"}
     CLAVE_CONSECUTIVO = "consecutivo_seguridad_social"
     NIT_ARUS = "900089104"
+    NIT_OPERADOR = NIT_ARUS
     NOMBRE_OPERADOR = "ENLACE OPERATIVO"
     CODPUC_INTERESES_MORA = "530520001"
     CODPUC_CONTRAPARTIDA = "112005001"
@@ -124,9 +125,9 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         return {"codpuc_auto": cuenta, "tercero_ref": tercero, "nombre": nombre,
                 "debito": debito, "credito": credito}
 
-    def _con_contrapartida(self, cuenta, tercero, nombre, monto):
-        return [self._fila(cuenta, tercero, nombre, debito=monto),
-                self._fila(self.CODPUC_CONTRAPARTIDA, tercero, nombre, credito=monto)]
+    def _con_contrapartida_total(self, filas):
+        total = round(sum(f["debito"] for f in filas if pd.notna(f["debito"])), 2)
+        return filas + [self._fila(self.CODPUC_CONTRAPARTIDA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, credito=total)]
 
     def preparar(self):
         texto = self._leer_pdf()
@@ -155,9 +156,9 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
             if not cuenta and valor:
                 sin_cuenta.append(adm or nit or m["cod"])
             if valor:
-                filas += self._con_contrapartida(cuenta, tercero, nombre, valor)
+                filas.append(self._fila(cuenta, tercero, nombre, debito=valor))
             if mora:
-                filas += self._con_contrapartida(self.CODPUC_INTERESES_MORA, tercero, nombre, mora)
+                filas.append(self._fila(self.CODPUC_INTERESES_MORA, tercero, nombre, debito=mora))
             total += valor + mora
 
         if not filas:
@@ -174,7 +175,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
             [f"Sin cuenta contable en administradoras.json:\n- " + "\n- ".join(sin_cuenta)] if sin_cuenta else []
         )
 
-        return pd.DataFrame(filas).assign(
+        return pd.DataFrame(self._con_contrapartida_total(filas)).assign(
             mov=0, clase=self.CLASE_SS, tipo=self.COMPROBANTES_PREDETERMINADOS[self.CLASE_SS],
             ano=ano, mes=mes, dia=dia, detalle=detalle,
             codpuc_manual="", tercero_manual="", docrela="",
