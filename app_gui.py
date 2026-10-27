@@ -10,7 +10,8 @@ from pdf_engine import (
 )
 from PIL import Image, ImageTk
 from version import __version__
-from clasificador_conceptos import ClasificadorConceptos
+import actualizador
+
 from worker_manager import TrabajadorEnSegundoPlano
 from ui_theme import (
     aplicar_estilos,
@@ -48,18 +49,24 @@ except ImportError as err:
     extraer_datos_desde_excel = None
     _import_parser_error_msg = str(err)
 try:
-    from script_davivienda import ejecutar_proceso_exportacion as exportar_davivienda
+    from script_davivienda import ejecutar_proceso_exportacion as exportar_davivienda, elegir_tipo_cuenta
 except Exception as e:
     exportar_davivienda = None
+    elegir_tipo_cuenta = None
     if _import_error_msg is None:
         _import_error_msg = str(e)
-
 try:
     from script_seguridad_social import GeneradorSeguridadSocial
     _import_ss_error_msg = None
 except Exception as e:
     GeneradorSeguridadSocial = None
     _import_ss_error_msg = str(e)
+try:
+    from script_aportes_en_linea import GeneradorAportesEnLinea
+    _import_ael_error_msg = None
+except Exception as e:
+    GeneradorAportesEnLinea = None
+    _import_ael_error_msg = str(e)
 class PDFViewerApp:
 
     def __init__(self, root: tk.Tk):
@@ -78,6 +85,15 @@ class PDFViewerApp:
         self._center_window()
         aplicar_estilos(self.root)
         self._build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self._cerrar)
+        actualizador.programar(self.root, al_cerrar=self._cerrar)
+
+    def _cerrar(self):
+        try:
+            self.pdf_engine.liberar_recursos()
+        except Exception:
+            pass
+        self.root.destroy()
 
     def _center_window(self):
         self.root.update_idletasks()
@@ -163,7 +179,8 @@ class PDFViewerApp:
                 "Banco de Bogotá (Extractos PyME)",
                 "Nequi",
                 "Davivienda",
-                "Seguridad social",
+                "Seguridad social (ARUS)",
+                "Seguridad social (Aportes en Línea)",
             ],
             state="readonly",
             font=("Segoe UI", 10),
@@ -225,15 +242,7 @@ class PDFViewerApp:
         )
         self.btn_load_excel.pack(fill=tk.X, pady=6)
 
-        self.btn_editarbancarios = ttk.Button(
-            left_frame,
-            text="✏️ Editar Bancarios",
-            command=lambda: self.abrir_clasificador(),
-            style="Primary.TButton",
-            cursor="hand2",
-            state=tk.DISABLED,
-        )
-        self.btn_editarbancarios.pack(fill=tk.X, pady=6)
+
 
         self.btn_archivo_plano = ttk.Button(
             left_frame,
@@ -251,7 +260,6 @@ class PDFViewerApp:
             self.btn_movimientos_pn,
             self.btn_movimientos_soc,
             self.btn_load_excel,
-            self.btn_editarbancarios,
             self.btn_archivo_plano,
         ]
 
@@ -311,6 +319,24 @@ class PDFViewerApp:
 
         self.btn_open_excel.pack(fill=tk.X, pady=6)
 
+        ttk.Button(
+            left_frame,
+            text="🏛️ Administradoras",
+            command=self._abrir_administradoras,
+            style="Secondary.TButton",
+            cursor="hand2",
+        ).pack(fill=tk.X, pady=6)
+
+        ttk.Button(
+            left_frame,
+            text="⬆ Actualizaciones",
+            command=lambda: actualizador.verificar(self.root, True, self._cerrar),
+            style="Secondary.TButton",
+            cursor="hand2",
+        ).pack(fill=tk.X, pady=6)
+
+        ttk.Separator(left_frame, orient="horizontal").pack(fill=tk.X, pady=18)
+
         ttk.Separator(left_frame, orient="horizontal").pack(fill=tk.X, pady=18)
 
         status_header = ttk.Label(
@@ -336,6 +362,8 @@ class PDFViewerApp:
             style="Footer.TLabel",
         )
         footer_label.pack(anchor="w", side=tk.BOTTOM, pady=(10, 0))
+
+
 
         # ============= PANEL DERECHO =============
         right_frame = ttk.Frame(paned_window, style="Content.TFrame")
@@ -434,18 +462,13 @@ class PDFViewerApp:
     def _set_botones_bloqueados(self, bloqueados: bool):
         """Evita disparar una segunda tarea pesada mientras un hilo secundario trabaja."""
         estado = tk.DISABLED if bloqueados else tk.NORMAL
-        for btn in (
-            self.btn_process,
-            self.btn_load_excel,
-            self.btn_editarbancarios,
-        ):
+        for btn in (self.btn_process, self.btn_load_excel):
             btn.config(state=estado)
 
         for btn in self.botones_dependientes_banco:
-            if btn is self.btn_load_excel or btn is self.btn_editarbancarios:
+            if btn is self.btn_load_excel:
                 continue
             if not bloqueados:
-                # Al reactivar, respetar las reglas del banco seleccionado.
                 self._on_banco_seleccionado()
                 break
             btn.config(state=tk.DISABLED)
@@ -478,17 +501,6 @@ class PDFViewerApp:
         elif seleccion.startswith("Seguridad social"):
             self.btn_seguridad_social.config(state=tk.NORMAL)
 
-    def abrir_clasificador(self):
-        ruta_excel = getattr(self.pdf_engine, "last_excel_path", None)
-
-        if not ruta_excel:
-            messagebox.showwarning(
-                "Aviso",
-                "Primero debes procesar un PDF para generar un archivo Excel."
-            )
-            return
-
-        ClasificadorConceptos(self.root, ruta_excel, self.cargar_excel_en_gui)
 
     def cargar_archivo_excel(self):
         """Abre un explorador, selecciona un .xlsx y lo procesa con parser_excel.py
@@ -573,10 +585,14 @@ class PDFViewerApp:
         )
         self.resetear_progreso()
 
+    def _es_aportes_en_linea(self):
+        return self.combo_bancos.get().endswith("(Aportes en Línea)")
+
     def cargar_y_procesar_pdf(self, prefijo_tipo):
+        acepta_excel = prefijo_tipo == "SeguridadSocial" and self._es_aportes_en_linea()
         file_path = filedialog.askopenfilename(
-            title=f"Seleccionar PDF de {prefijo_tipo}",
-            filetypes=[("Archivos PDF", "*.pdf")],
+            title=f"Seleccionar {'PDF o Excel' if acepta_excel else 'PDF'} de {prefijo_tipo}",
+            filetypes=[("PDF o Excel", "*.pdf;*.xlsx;*.xls")] if acepta_excel else [("Archivos PDF", "*.pdf")],
         )
 
         if not file_path:
@@ -607,6 +623,10 @@ class PDFViewerApp:
                 if file_path != new_file_path:
                     os.replace(file_path, new_file_path)
                     file_path = new_file_path
+
+            if acepta_excel and not file_path.lower().endswith(".pdf"):
+                self._procesar_seguridad_social(file_path)
+                return
 
             self.current_pdf_path = file_path
             self.tipo_documento = prefijo_tipo
@@ -734,16 +754,33 @@ class PDFViewerApp:
             f"No se pudo renderizar el PDF:\n{str(error)}",
         )
 
-    def _procesar_seguridad_social(self):
-        if GeneradorSeguridadSocial is None:
+    def _abrir_administradoras(self):
+        ventana = getattr(self, "_editor_adm", None)
+        if ventana is not None and ventana.winfo_exists():
+            ventana.deiconify()
+            ventana.lift()
+            ventana.focus_force()
+            return
+        try:
+            from editor_administradoras import EditorAdministradoras
+            self._editor_adm = EditorAdministradoras(self.root)
+        except Exception as e:
+            messagebox.showerror("Administradoras", f"No se pudo abrir administradoras.json:\n{e}")
+
+    def _procesar_seguridad_social(self, ruta_origen=None):
+        if self._es_aportes_en_linea():
+            clase, modulo, error = GeneradorAportesEnLinea, "script_aportes_en_linea.py", _import_ael_error_msg
+        else:
+            clase, modulo, error = GeneradorSeguridadSocial, "script_seguridad_social.py", _import_ss_error_msg
+        if clase is None:
             messagebox.showerror(
                 "Error de Módulo",
-                f"No se pudo importar 'script_seguridad_social.py':\n{_import_ss_error_msg}",
+                f"No se pudo importar '{modulo}':\n{error}",
             )
             return
-        pdf_path = self.pdf_engine.current_path
+        pdf_path = ruta_origen or self.pdf_engine.current_path
         ruta = generar_plano_con_dialogo(
-            self.root, pdf_path, generador=GeneradorSeguridadSocial(pdf_path), confirmar=False, pedir_ruta=True
+            self.root, pdf_path, generador=clase(pdf_path), confirmar=False, pedir_ruta=True
         )
         if not ruta:
             return
@@ -786,12 +823,11 @@ class PDFViewerApp:
                 f"No se pudo importar el script de Bancolombia:\n{_import_error_msg}",
             )
             return
-        elif usa_davivienda and exportar_davivienda is None:
-            messagebox.showerror(
-                "Error de Módulo",
-                "No se pudo importar el script de Davivienda."
-            )
-            return 
+        tipo_cuenta = None
+        if usa_davivienda:
+            tipo_cuenta = elegir_tipo_cuenta(self.root, self.pdf_engine.current_path)
+            if not tipo_cuenta:
+                return
 
         nombre_base_pdf = os.path.splitext(
             os.path.basename(self.pdf_engine.current_path)
@@ -873,11 +909,12 @@ class PDFViewerApp:
                     output_excel_path=save_path,
                     progreso_callback=callback,
                 )
-            elif usa_davivienda: # <-- NUEVO
+            elif usa_davivienda:
                 excel_generado = exportar_davivienda(
                     pdf_path,
                     output_excel_path=save_path,
                     progreso_callback=callback,
+                    tipo_cuenta=tipo_cuenta,
                 )
 
             if not excel_generado:
@@ -909,7 +946,6 @@ class PDFViewerApp:
             style="Status.TLabel",
         )
 
-        ClasificadorConceptos(self.root, excel_generado, self.cargar_excel_en_gui)
         self.cargar_excel_en_gui(excel_generado)
         self.finalizar_progreso("Extracción completada correctamente")
 
@@ -918,6 +954,7 @@ class PDFViewerApp:
             "¡Extracción completada!\n\nArchivo guardado"
             f" en:\n{excel_generado}",
         )
+        generar_plano_con_dialogo(self.root, excel_generado)
 
     def _on_error_process_pdf(self, error):
         self.root.config(cursor="")

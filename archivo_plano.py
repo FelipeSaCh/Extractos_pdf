@@ -16,20 +16,35 @@ class GeneradorArchivoPlano:
         "area", "numexterno", "anexo", "bodega"
     ]
 
+    ALIAS_COLUMNAS = {
+        "FECHA": ("FECHA", "FECHA DEL MOVIMIENTO", "FECHA MOVIMIENTO", "FECHA TRANSACCION", "FECHA TRANSACCIÓN"),
+        "DESCRIPCIÓN": ("DESCRIPCIÓN", "DESCRIPCION", "CLASE DE MOVIMIENTO", "CONCEPTO", "DETALLE",
+                        "TRANSACCION", "TRANSACCIÓN"),
+        "VALOR": ("VALOR", "MONTO", "IMPORTE", "VALOR TRANSACCION", "VALOR TRANSACCIÓN"),
+    }
+    COLUMNAS_DEBITO = ("DEBITOS", "DÉBITOS", "DEBITO", "DÉBITO", "CARGOS", "CARGO", "VALOR DEBITO", "VALOR DÉBITO")
+    COLUMNAS_CREDITO = ("CREDITOS", "CRÉDITOS", "CREDITO", "CRÉDITO", "ABONOS", "ABONO", "VALOR CREDITO", "VALOR CRÉDITO")
+    COLUMNAS_REFERENCIA = ("REFERENCIA 1", "REFERENCIA", "DCTO.", "DOCUMENTO")
+    COLUMNAS_TERCERO = ("NIT", "CEDULA", "CÉDULA", "REFERENCIA 1", "REFERENCIA", "DCTO.")
+
     CONCEPTOS_BANCARIOS = [
-        ("GMF 4X1000", r"4\s*X\s*1\.?000"),
+        ("GMF 4X1000", r"4\s*X\s*1\.?000|GRAVAMEN|\bGMF\b"),
+        ("RETENCION EN LA FUENTE", r"RET(?:ENCI[OÓ]N|E)\.?\s*(?:EN\s+LA\s+)?FUENTE|\bRTE\.?\s*FTE\b"),
         ("IVA", r"\bIVA\b"),
         ("CUOTA PLAN CANAL NEGOCIOS", r"CUOTA\s+PLAN\s+CANAL\s+NEGOCIOS"),
+        ("CUOTA DE MANEJO", r"CUOTA\s+(?:DE\s+)?MANEJO"),
         ("TARJETA DE CREDITO", r"TARJETA\s+DE\s+CR[EÉ]DITO"),
         ("COMISION", r"COMISI[OÓ]N"),
         ("SERVICIO", r"SERVICIO"),
         ("TARJ DEB", r"TARJ\s+DEB"),
-        ("INTERESES AHORROS", r"INTERESES\s+AHORROS"),
+        ("INTERESES AHORROS", r"INTERESES\s+AHORROS|ABONO\s+INTERESES|\bRENDIMIENTOS?\b"),
     ]
     CODPUC_BANCARIOS = {
         "GMF 4X1000": "530595001",
+        "RETENCION EN LA FUENTE": "135515001",
         "IVA": "530505002",
         "CUOTA PLAN CANAL NEGOCIOS": "530505001",
+        "CUOTA DE MANEJO": "530505001",
         "TARJETA DE CREDITO": "530505003",
         "COMISION": "530515001",
         "SERVICIO": "530505001",
@@ -54,14 +69,15 @@ class GeneradorArchivoPlano:
         CLASE_EGRESO: "EG1",
         CLASE_NOMINA: "EG2",
         CLASE_RECIBO: "RC1",
-        CLASE_BANCARIO: "CC1",
+        CLASE_BANCARIO: "AJB",
     }
-    ORDEN_PREFIJOS = {"CC": 0, "EG": 1, "RC": 2}
+    PREFIJOS_BANCARIO = ("AJ", "CC")
+    ORDEN_PREFIJOS = {"AJ": 0, "CC": 0, "EG": 1, "RC": 2}
 
     LADO_BANCO = "BANCO"
     LADO_CONTRA = "CONTRA"
 
-    PATRON_NOMINA = r"PAGO A NOMIN"
+    PATRON_NOMINA = r"PAGO\s+(?:A\s+|DE\s+)?N[OÓ]MIN"
     DETALLE_NOMINA = "PAGO A NOMIN"
 
     MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
@@ -70,13 +86,47 @@ class GeneradorArchivoPlano:
     def __init__(self, ruta_excel_origen):
         self.ruta_origen = ruta_excel_origen
 
+    @staticmethod
+    def _columna(df, candidatos):
+        return next((c for c in candidatos if c in df.columns), None)
+
+    @staticmethod
+    def _texto(serie):
+        return serie.fillna("").astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+
+    @staticmethod
+    def _a_numero(serie):
+        if not pd.api.types.is_object_dtype(serie):
+            return pd.to_numeric(serie, errors='coerce')
+        txt = serie.fillna("").astype(str).str.strip()
+        neg = txt.str.contains(r"^\s*-|-\s*$|^\(.*\)$", regex=True)
+        txt = txt.str.replace(r"[^\d.,]", "", regex=True)
+        coma_dec = txt.str.contains(r",\d{1,2}$", regex=True)
+        txt = txt.where(~coma_dec, txt.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+        txt = txt.where(coma_dec, txt.str.replace(",", "", regex=False))
+        txt = txt.where(txt.str.count(r"\.") <= 1, txt.str.replace(".", "", regex=False))
+        num = pd.to_numeric(txt, errors='coerce')
+        return num.where(~neg, -num)
+
+    def _normalizar_columnas(self, df):
+        df = df.rename(columns=lambda c: re.sub(r"\s+", " ", str(c)).strip().upper())
+        for canon, alias in self.ALIAS_COLUMNAS.items():
+            col = None if canon in df.columns else self._columna(df, alias)
+            if col:
+                df = df.rename(columns={col: canon})
+        if "VALOR" not in df.columns:
+            deb = self._columna(df, self.COLUMNAS_DEBITO)
+            cre = self._columna(df, self.COLUMNAS_CREDITO)
+            if deb or cre:
+                abonos = self._a_numero(df[cre]).fillna(0.0).abs() if cre else 0.0
+                cargos = self._a_numero(df[deb]).fillna(0.0).abs() if deb else 0.0
+                df["VALOR"] = abonos - cargos
+        return df
+
     def _limpiar_y_convertir_valores(self, df):
         if 'VALOR' not in df.columns:
             return pd.Series(0.0, index=df.index)
-        if df['VALOR'].dtype == object:
-            valor_limpio = df['VALOR'].astype(str).str.replace(r'[^\d\.-]', '', regex=True)
-            return pd.to_numeric(valor_limpio, errors='coerce').fillna(0.0)
-        return df['VALOR'].fillna(0.0)
+        return self._a_numero(df['VALOR']).fillna(0.0)
 
     def _es_tercero_valido(self, texto):
         if pd.isna(texto) or not texto:
@@ -107,7 +157,9 @@ class GeneradorArchivoPlano:
         valida = partes['mes'].between(1, 12) & partes['dia'].between(1, 31)
         partes = partes.where(valida)
         ano = partes['ano'].where(partes['ano'] >= 2000)
-        partes['ano'] = ano.mask(valida & ano.isna(), datetime.date.today().year)
+        hoy = datetime.date.today()
+        ano_inferido = pd.Series(np.where(partes['mes'] > hoy.month, hoy.year - 1, hoy.year), index=df.index)
+        partes['ano'] = ano.mask(valida & ano.isna(), ano_inferido)
         return partes['ano'], partes['mes'], partes['dia']
 
     @staticmethod
@@ -131,17 +183,17 @@ class GeneradorArchivoPlano:
         valores = self._limpiar_y_convertir_valores(df)
         ano, mes, dia = self._extraer_fechas(df)
 
-        desc = df.get("DESCRIPCIÓN", df.get("DESCRIPCION", pd.Series([""] * n, index=df.index)))
+        desc = df.get("DESCRIPCIÓN", pd.Series([""] * n, index=df.index))
         desc = desc.fillna("").astype(str).str.strip()
 
-        col_ref = next((c for c in ["REFERENCIA 1", "REFERENCIA", "DCTO."] if c in df.columns), None)
-        if col_ref:
-            ref = df[col_ref].fillna("").astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
-            detalle = (desc + " " + ref).str.strip()
-            tercero = ref.apply(self._es_tercero_valido)
-        else:
-            detalle = desc
-            tercero = pd.Series("", index=df.index)
+        col_ref = self._columna(df, self.COLUMNAS_REFERENCIA)
+        ref = self._texto(df[col_ref]) if col_ref else pd.Series("", index=df.index)
+        detalle = (desc + " " + ref).str.strip()
+
+        tercero = pd.Series("", index=df.index)
+        for col in self.COLUMNAS_TERCERO:
+            if col in df.columns:
+                tercero = tercero.mask(tercero == "", self._texto(df[col]).apply(self._es_tercero_valido))
 
         mov = pd.DataFrame({
             'clase': "",
@@ -253,6 +305,11 @@ class GeneradorArchivoPlano:
             df = pd.read_excel(self.ruta_origen, sheet_name="Datos")
         except ValueError:
             raise ValueError("El archivo seleccionado no contiene la hoja 'Datos'.")
+        df = self._normalizar_columnas(df)
+        if "VALOR" not in df.columns:
+            raise ValueError("No se identificó la columna de valor (VALOR o DÉBITOS/CRÉDITOS) en la hoja 'Datos'.")
+        if "FECHA" in df.columns:
+            df = df[df["FECHA"].notna() & df["FECHA"].astype(str).str.strip().ne("")].reset_index(drop=True)
 
         mov = self._construir_movimientos(df)
         mov = self._consolidar_bancarios(mov)
@@ -281,7 +338,7 @@ class GeneradorArchivoPlano:
 
         contra = np.select(
             [
-                prefijo == "CC",
+                prefijo.isin(self.PREFIJOS_BANCARIO),
                 (prefijo == "EG") & (df['clase'] == self.CLASE_NOMINA),
                 prefijo == "EG",
                 prefijo == "RC",
@@ -309,13 +366,19 @@ class GeneradorArchivoPlano:
 
         df = (
             df.assign(_rango=prefijo.map(self.ORDEN_PREFIJOS).fillna(len(self.ORDEN_PREFIJOS)), _credito=~en_debito)
-            .sort_values(['_rango', 'tipo', 'detalle', 'ano', 'mes', 'dia', 'mov', '_credito'],
+            .sort_values(['_rango', 'tipo', 'ano', 'mes', 'dia', 'detalle', 'mov', '_credito'],
                          kind='stable', na_position='last')
             .drop(columns=['_rango', '_credito'])
         )
-        inicio = self._a_entero(primer_consecutivo)
-        df['numero'] = [f"{n:010d}" for n in pd.factorize(df['mov'])[0] + inicio]
+        movs = df.drop_duplicates('mov')[['mov', 'tipo']]
+        if isinstance(primer_consecutivo, dict):
+            inicio = movs['tipo'].map(lambda t: self._a_entero(primer_consecutivo.get(t, 1)))
+        else:
+            inicio = pd.Series(self._a_entero(primer_consecutivo), index=movs.index)
+        numeros = inicio + movs.groupby('tipo').cumcount()
+        df['numero'] = df['mov'].map(dict(zip(movs['mov'], numeros))).map(lambda n: f"{n:010d}")
         return df
+
 
     def generar(self, lin=None, nit_empresa="", primer_consecutivo=1, ruta_destino_final=None):
         if not ruta_destino_final:

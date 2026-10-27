@@ -439,6 +439,8 @@ def reorganizar_excel(excel_path):
     xl = pd.ExcelFile(excel_path)
     sheet_a_leer = "Datos" if "Datos" in xl.sheet_names else 0
     df = pd.read_excel(excel_path, sheet_name=sheet_a_leer, dtype=str)
+    if "FECHA" in df.columns:
+        df = df[df["FECHA"].fillna("").str.strip().ne("")].reset_index(drop=True)
 
     if "VALOR" not in df.columns or df.empty:
         return excel_path
@@ -478,42 +480,27 @@ def reorganizar_excel(excel_path):
     if tiene_columna_saldo and not saldos_numericos.empty:
         saldo_anterior = saldos_numericos.iloc[0] - valores_numericos.iloc[0]
         saldo_actual = saldos_numericos.iloc[-1]
-        filas_resumen.append(
-            {"CONCEPTO": "SALDO ANTERIOR", "MONTO": saldo_anterior}
-        )
+        filas_resumen.append({"CONCEPTO": "SALDO ANTERIOR", "MONTO": saldo_anterior})
 
     filas_resumen.append({"CONCEPTO": "TOTAL CARGOS", "MONTO": cargos_sum})
     filas_resumen.append({"CONCEPTO": "TOTAL ABONOS", "MONTO": abonos_sum})
 
     if tiene_columna_saldo and not saldos_numericos.empty:
-        filas_resumen.append(
-            {"CONCEPTO": "SALDO ACTUAL", "MONTO": saldo_actual}
-        )
+        filas_resumen.append({"CONCEPTO": "SALDO ACTUAL", "MONTO": saldo_actual})
 
     df_conciliacion = pd.DataFrame(filas_resumen)
 
-    # --- NUEVA LÓGICA DE EXTRACCIÓN DE MES ---
     df_calc = df.copy()
-    
-    # Extraer el mes convirtiendo a datetime de forma flexible
-    # Mantiene formato seguro incluso si las fechas son DD/MM o YYYY/MM/DD
-    fechas_dt = pd.to_datetime(df_calc["FECHA"], errors="coerce", dayfirst=True,format="mixed")
-    
-    # Si alguna fecha no fue parseada directamente (ej: '30/05'), intentamos extraera manualmente vía Regex
+    fechas_dt = pd.to_datetime(df_calc["FECHA"], errors="coerce", dayfirst=True, format="mixed")
     meses_extraidos = fechas_dt.dt.month.fillna(
         df_calc["FECHA"].astype(str).str.extract(r"[/.-](\d{1,2})", expand=False)
     )
-    
+
     df_calc["MES"] = pd.to_numeric(meses_extraidos, errors="coerce").fillna(0).astype(int)
     df_calc["_VALOR_NUM"] = valores_numericos
-    df_calc["_CARGOS_TEMP"] = df_calc["_VALOR_NUM"].apply(
-        lambda x: x if x < 0 else 0.0
-    )
-    df_calc["_ABONOS_TEMP"] = df_calc["_VALOR_NUM"].apply(
-        lambda x: x if x > 0 else 0.0
-    )
+    df_calc["_CARGOS_TEMP"] = df_calc["_VALOR_NUM"].apply(lambda x: x if x < 0 else 0.0)
+    df_calc["_ABONOS_TEMP"] = df_calc["_VALOR_NUM"].apply(lambda x: x if x > 0 else 0.0)
 
-# Agrupar por MES y DESCRIPCIÓN
     df_grouped = (
         df_calc.groupby(["MES", col_desc], as_index=False)
         .agg(
@@ -524,42 +511,25 @@ def reorganizar_excel(excel_path):
         .sort_values(by=["MES", "CARGOS"], ascending=[True, True])
     )
 
-    # --- INSERCIÓN DE 3 FILAS EN BLANCO POR CAMBIO DE MES Y TOTAL ---
     filas_con_espacios = []
     meses_unicos = df_grouped["MES"].unique()
-
-    # Fila vacía base con la misma estructura
-    fila_vacia = {
-        "MES": "",
-        col_desc: "",
-        "CARGOS": None,
-        "ABONOS": None,
-        "NETO": None,
-    }
+    fila_vacia = {"MES": "", col_desc: "", "CARGOS": None, "ABONOS": None, "NETO": None}
 
     for i, mes in enumerate(meses_unicos):
-        # Filtrar registros del mes actual
         df_mes = df_grouped[df_grouped["MES"] == mes]
         filas_con_espacios.extend(df_mes.to_dict("records"))
-
-        # Si no es el último grupo de meses, agregar 3 filas vacías
         if i < len(meses_unicos) - 1:
             filas_con_espacios.extend([fila_vacia.copy() for _ in range(3)])
 
-    # Agregar 3 filas en blanco antes del TOTAL GENERAL
     filas_con_espacios.extend([fila_vacia.copy() for _ in range(3)])
-
-    # Fila del Total General
-    fila_total = {
+    filas_con_espacios.append({
         "MES": "",
         col_desc: "TOTAL GENERAL",
         "CARGOS": float(df_grouped["CARGOS"].sum()),
         "ABONOS": float(df_grouped["ABONOS"].sum()),
         "NETO": float(df_grouped["NETO"].sum()),
-    }
-    filas_con_espacios.append(fila_total)
+    })
 
-    # Crear el DataFrame final para la hoja Conceptos
     df_conceptos = pd.DataFrame(filas_con_espacios)
 
     # PASO 3: REORGANIZACIÓN VISUAL (Negativos arriba)
@@ -572,9 +542,7 @@ def reorganizar_excel(excel_path):
     df_datos["_orden_temp"] = 0
     df_datos.loc[~is_negative, "_orden_temp"] = 1
 
-    df_datos_ordenado = df_datos.sort_values(
-        by="_orden_temp", kind="stable"
-    ).drop(columns=["_orden_temp"])
+    df_datos_ordenado = df_datos.sort_values(by="_orden_temp", kind="stable").drop(columns=["_orden_temp"])
 
     # PASO 4: EXPORTACIÓN Y FORMATO EN EXCEL
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
@@ -587,31 +555,39 @@ def reorganizar_excel(excel_path):
 
         for sheet_name in workbook.sheetnames:
             worksheet = workbook[sheet_name]
-
             for col in worksheet.iter_cols(1, worksheet.max_column):
                 header_val = str(col[0].value).upper() if col[0].value else ""
-
-                if header_val in [
-                    "VALOR",
-                    "SALDO",
-                    "CARGOS",
-                    "ABONOS",
-                    "NETO",
-                    "MONTO",
-                ]:
+                if header_val in ["VALOR", "SALDO", "CARGOS", "ABONOS", "NETO", "MONTO"]:
                     for cell in col[1:]:
-                        if cell.value is not None and isinstance(
-                            cell.value, (int, float)
-                        ):
+                        if cell.value is not None and isinstance(cell.value, (int, float)):
                             cell.number_format = FORMATO_MONEDA
 
-    return excel_path
+        _anexar_resumen(
+            workbook["Datos"], df_conciliacion,
+            df_datos_ordenado.columns.get_loc(col_desc) + 1,
+            df_datos_ordenado.columns.get_loc("VALOR") + 1,
+            FORMATO_MONEDA,
+        )
+        _anexar_resumen(
+            workbook["Conceptos"], df_conciliacion,
+            df_conceptos.columns.get_loc(col_desc) + 1,
+            df_conceptos.columns.get_loc("NETO") + 1,
+            FORMATO_MONEDA,
+        )
 
+    return excel_path
 
 # ==============================================================================
 # ORQUESTADOR PRINCIPAL
 # ==============================================================================
-
+def _anexar_resumen(ws, df_resumen, col_concepto, col_monto, formato):
+    fila = ws.max_row + 3
+    ws.cell(fila, col_concepto, "RESUMEN").font = Font(bold=True)
+    for i, (concepto, monto) in enumerate(df_resumen[["CONCEPTO", "MONTO"]].itertuples(index=False), start=1):
+        ws.cell(fila + i, col_concepto, concepto).font = Font(bold=True)
+        celda = ws.cell(fila + i, col_monto, float(monto))
+        celda.number_format = formato
+        celda.font = Font(bold=True)
 
 def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_callback=None):
     """Detecta automáticamente el tipo de documento según el nombre del PDF."""

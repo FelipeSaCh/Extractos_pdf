@@ -6,7 +6,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import pandas as pd
 from dialogo_plano import generar_plano_con_dialogo
-
+ETIQUETAS_TOTAL = {"TOTAL GENERAL", "RESUMEN", "SALDO ANTERIOR", "TOTAL CARGOS", "TOTAL ABONOS", "SALDO ACTUAL"}
 def aplicar_estilos_segun_imagen(excel_path):
     """Aplica la estética exacta de la imagen:
 
@@ -59,8 +59,10 @@ def aplicar_estilos_segun_imagen(excel_path):
             cell.border = border_thin
 
         for row_idx in range(2, ws.max_row + 1):
-            primera_celda = str(ws.cell(row=row_idx, column=1).value or "").upper()
-            es_fila_total = "TOTAL" in primera_celda
+            es_fila_total = sheet_name != "Resumen" and any(
+                str(ws.cell(row=row_idx, column=c).value or "").strip().upper() in ETIQUETAS_TOTAL
+                for c in range(1, ws.max_column + 1)
+            )
 
             for col_idx in range(1, ws.max_column + 1):
                 cell = ws.cell(row=row_idx, column=col_idx)
@@ -275,47 +277,43 @@ class ClasificadorConceptos(tk.Toplevel):
                     )
                     df.loc[unmask, "Observacion"] = None
 
-                    # Separar fila de TOTAL GENERAL para dejarla siempre al final
-                    es_total = (
-                        df["DESCRIPCIÓN"].astype(str).str.upper()
-                        == "TOTAL GENERAL"
-                    )
-                    df_datos = df[~es_total].copy()
-                    df_total = df[es_total].copy()
+                    desc_up = df["DESCRIPCIÓN"].fillna("").astype(str).str.strip().str.upper()
+                    vacia = df.isna().all(axis=1)
+                    marcas = desc_up.isin(["TOTAL GENERAL", "RESUMEN"])
+                    inicio = int(marcas.to_numpy().argmax()) if marcas.any() else len(df)
+                    while inicio > 0 and vacia.iloc[inicio - 1]:
+                        inicio -= 1
+                    df_datos = df.iloc[:inicio][~vacia.iloc[:inicio]].copy()
+                    df_total = df.iloc[inicio:].copy()
 
-# --- NUEVA LÓGICA DE ORDENAMIENTO ---
-                    # 1. Identificar si es bancario (False va primero porque queremos Bancarios arriba)
                     df_datos["_ord_bancario"] = df_datos["Observacion"] != "Bancario"
 
-                    # 2. Identificar negativos arriba y positivos abajo (buscamos columnas numéricas comunes)
-                    col_ref_numerica = None
-                    for col in ["VALOR", "NETO", "CARGOS"]:
-                        if col in df_datos.columns:
-                            col_ref_numerica = col
-                            break
-                    
+                    col_ref_numerica = next((c for c in ["VALOR", "NETO", "CARGOS"] if c in df_datos.columns), None)
                     if col_ref_numerica:
-                        # Corregido: errors="coerce" para transformar valores no numéricos en NaN y rellenar con 0
                         df_datos[col_ref_numerica] = pd.to_numeric(df_datos[col_ref_numerica], errors="coerce").fillna(0)
-                        # True (1) para positivos o ceros, False (0) para negativos -> Negativos quedan arriba
                         df_datos["_ord_signo"] = df_datos[col_ref_numerica] >= 0
                     else:
                         df_datos["_ord_signo"] = False
 
-                    # 3. Orden alfabético A-Z para la descripción
                     df_datos["_ord_desc"] = df_datos["DESCRIPCIÓN"].astype(str).str.upper()
 
-                    # Aplicar orden jerárquico multinivel
                     criterios_orden = ["_ord_bancario", "_ord_signo", "_ord_desc"]
-                    columnas_auxiliares = criterios_orden.copy()
-                    
-                    df_datos = df_datos.sort_values(
-                        by=criterios_orden, kind="stable"
-                    ).drop(columns=columnas_auxiliares)
+                    if "MES" in df_datos.columns:
+                        df_datos["_ord_mes"] = pd.to_numeric(df_datos["MES"], errors="coerce")
+                        criterios_orden.insert(0, "_ord_mes")
 
-                    # Concatenar datos ordenados + Total
+                    df_datos = df_datos.sort_values(by=criterios_orden, kind="stable").drop(columns=criterios_orden)
+
+                    if "MES" in df_datos.columns:
+                        bloques = []
+                        for i, (_, g) in enumerate(df_datos.groupby("MES", sort=False)):
+                            if i:
+                                bloques.append(pd.DataFrame([{}] * 3, columns=df_datos.columns))
+                            bloques.append(g)
+                        if bloques:
+                            df_datos = pd.concat(bloques, ignore_index=True)
+
                     df = pd.concat([df_datos, df_total], ignore_index=True)
-
                 hojas_dict[sheet_name] = df
 
             with pd.ExcelWriter(self.excel_path, engine="openpyxl") as writer:

@@ -65,6 +65,7 @@ def _cargar_administradoras(ruta):
         "nit": col("NIT").map(_digitos),
         "categoria": col("CATEGOR", False).map(_normalizar),
         "cuenta": col("CUENTA").map(_digitos),
+        "codigo": col("CODIGO", False).map(lambda v: "" if pd.isna(v) else re.sub(r"\s", "", str(v)).upper()),
     })
 
 

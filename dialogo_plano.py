@@ -1,4 +1,3 @@
-#dialogo_plano.py
 import json
 import os
 import re
@@ -20,6 +19,43 @@ PATRON_TIPO = re.compile(r"^[A-Z0-9]{1,5}$")
 PATRON_CODPUC = re.compile(r"^\d{4,12}$")
 PATRON_TERCERO = re.compile(r"^\d{5,15}(?:-\d)?$")
 FUENTE = ("Segoe UI", 10)
+
+
+def _modal(ventana, parent):
+    raiz = parent.winfo_toplevel()
+    ventana.transient(raiz)
+
+    def capturar():
+        try:
+            if ventana.winfo_exists() and ventana.winfo_viewable():
+                ventana.grab_set()
+        except tk.TclError:
+            pass
+
+    def al_minimizar(e):
+        if e.widget is raiz and ventana.winfo_exists():
+            ventana.grab_release()
+
+    def al_restaurar(e):
+        if e.widget is raiz and ventana.winfo_exists():
+            ventana.deiconify()
+            ventana.lift()
+            ventana.focus_force()
+            ventana.after(50, capturar)
+
+    ids = [(ev, raiz.bind(ev, fn, "+")) for ev, fn in (("<Unmap>", al_minimizar), ("<Map>", al_restaurar))]
+
+    def liberar(e):
+        if e.widget is ventana:
+            for ev, fid in ids:
+                try:
+                    raiz.unbind(ev, fid)
+                except tk.TclError:
+                    pass
+
+    ventana.bind("<Destroy>", liberar, "+")
+    ventana.update_idletasks()
+    capturar()
 
 
 def _cargar_config():
@@ -71,12 +107,9 @@ class DialogoPlano(tk.Toplevel):
         self.title("Parámetros del Archivo Plano")
         self.geometry("1300x680")
         self.minsize(1050, 540)
-        self.transient(parent)
-        self.grab_set()
 
         self.gen = generador
         self.lin = lin
-        self._clave_consec = getattr(generador, "CLAVE_CONSECUTIVO", "consecutivo")
         self.predeterminados = dict(generador.COMPROBANTES_PREDETERMINADOS)
         self.tipo_clase = dict(self.predeterminados)
         self.cfg = _cargar_config()
@@ -85,7 +118,10 @@ class DialogoPlano(tk.Toplevel):
         self._pendiente = None
 
         self.var_nit = tk.StringVar(value=getattr(generador, "nit_empresa", "") or self.cfg.get("ultimo_nit", ""))
-        self.var_consec = tk.StringVar(value="1")
+        self.vars_consec = {}
+        self.lbl_consec = {}
+        self._tipos_consec = None
+        self._consec_guardados = {}
         self.vars_clase = {c: tk.StringVar(value=t) for c, t in self.tipo_clase.items()}
         self.var_buscar = tk.StringVar()
         self.var_filtro = tk.StringVar(value="Todas")
@@ -94,13 +130,13 @@ class DialogoPlano(tk.Toplevel):
         self.var_campo = tk.StringVar(value=self.EDITABLES["tipo"])
         self.var_valor = tk.StringVar()
         self.var_sel = tk.StringVar(value="0 seleccionados")
-        self.var_rango = tk.StringVar()
         self.var_totales = tk.StringVar()
 
         self._construir_ui()
         self._aplicar_nit()
+        _modal(self, parent)
 
-        for var in (self.var_nit, self.var_consec, self.var_buscar):
+        for var in (self.var_nit, self.var_buscar):
             var.trace_add("write", lambda *_: self._programar())
         self.var_campo.trace_add("write", lambda *_: self._refrescar_opciones())
         self.bind("<Control-Return>", self._confirmar)
@@ -120,7 +156,7 @@ class DialogoPlano(tk.Toplevel):
         self.ent_nit.pack(side=tk.LEFT, padx=8)
         self.ent_nit.bind("<Return>", self._aplicar_nit)
         self.ent_nit.bind("<FocusOut>", self._aplicar_nit)
-        ttk.Label(sup, text="Comprobantes y consecutivo se recuerdan por NIT.", foreground="gray").pack(side=tk.LEFT, padx=8)
+        ttk.Label(sup, text="Comprobantes y consecutivos se recuerdan por NIT.", foreground="gray").pack(side=tk.LEFT, padx=8)
 
         izq = ttk.Frame(raiz)
         izq.grid(row=1, column=0, sticky="ns", padx=(0, 12))
@@ -138,15 +174,12 @@ class DialogoPlano(tk.Toplevel):
             self.lbl_conteo[clase] = ttk.Label(frm_clases, foreground="gray")
             self.lbl_conteo[clase].grid(row=r, column=2, sticky="e")
             self.cmb_clase[clase] = cmb
-        if self.gen.CLASE_BANCARIO in self.predeterminados:
-            ttk.Button(frm_clases, text="Pasar retiros a CC", command=self._pasar_retiros).grid(
+        if getattr(self.gen, "CLASE_BANCARIO", None) in self.predeterminados:
+            ttk.Button(frm_clases, text="Pasar retiros a AJB", command=self._pasar_retiros).grid(
                 row=len(self.predeterminados), column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
-        frm_consec = ttk.LabelFrame(izq, text="Consecutivo", padding=10)
-        frm_consec.pack(fill=tk.X, pady=(10, 0))
-        ttk.Label(frm_consec, text="Primer consecutivo:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frm_consec, textvariable=self.var_consec, width=12, justify="right").grid(row=0, column=1, padx=6)
-        ttk.Label(frm_consec, textvariable=self.var_rango, foreground="gray").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.frm_consec = ttk.LabelFrame(izq, text="Consecutivo por comprobante", padding=10)
+        self.frm_consec.pack(fill=tk.X, pady=(10, 0))
 
         ttk.Button(izq, text="Generar archivo plano  (Ctrl+Enter)", command=self._confirmar).pack(side=tk.BOTTOM, fill=tk.X)
 
@@ -212,13 +245,45 @@ class DialogoPlano(tk.Toplevel):
         tipo = str(tipo or "").strip().upper()
         return tipo if PATRON_TIPO.match(tipo) else None
 
+    @staticmethod
+    def _entero(valor):
+        valor = str(valor or "").strip()
+        return int(valor) if valor.isdigit() and int(valor) > 0 else None
+
     def _avisar(self, titulo, mensaje):
         messagebox.showwarning(titulo, mensaje, parent=self)
         return False
 
+    def _conteo_tipos(self):
+        return self.lin.drop_duplicates("mov")["tipo"].value_counts()
+
     def _primer(self):
-        valor = self.var_consec.get().strip()
-        return int(valor) if valor.isdigit() and int(valor) > 0 else None
+        valores = {t: self._entero(self.vars_consec[t].get()) if t in self.vars_consec else None
+                   for t in self._conteo_tipos().index}
+        return None if not valores or None in valores.values() else valores
+
+    def _sincronizar_consecutivos(self, conteo):
+        tipos = sorted(conteo.index)
+        for tipo in tipos:
+            if tipo not in self.vars_consec:
+                var = tk.StringVar(value=str(self._consec_guardados.get(tipo, 1)))
+                var.trace_add("write", lambda *_: self._programar())
+                self.vars_consec[tipo] = var
+        if tipos != self._tipos_consec:
+            self._tipos_consec = tipos
+            for w in self.frm_consec.winfo_children():
+                w.destroy()
+            self.lbl_consec = {}
+            for r, tipo in enumerate(tipos):
+                ttk.Label(self.frm_consec, text=tipo, width=6).grid(row=r, column=0, sticky="w", pady=2)
+                ttk.Entry(self.frm_consec, textvariable=self.vars_consec[tipo], width=12, justify="right").grid(
+                    row=r, column=1, padx=6, pady=2)
+                self.lbl_consec[tipo] = ttk.Label(self.frm_consec, foreground="gray")
+                self.lbl_consec[tipo].grid(row=r, column=2, sticky="w")
+        for tipo in tipos:
+            ini, n = self._entero(self.vars_consec[tipo].get()), int(conteo[tipo])
+            self.lbl_consec[tipo].config(text=f"{n} → hasta {ini + n - 1}" if ini else "inválido",
+                                         foreground="gray" if ini else "#c01c28")
 
     def _programar(self):
         if self._pendiente:
@@ -237,8 +302,13 @@ class DialogoPlano(tk.Toplevel):
         empresa = self.cfg.get("empresas", {}).get(nit, {})
         clases = empresa.get("clases", {})
         for clase, defecto in self.predeterminados.items():
-            self._cambiar_clase(clase, clases.get(clase, defecto))
-        self.var_consec.set(str(empresa.get(self._clave_consec, 1)))
+            valor = clases.get(clase, defecto)
+            if clase == getattr(self.gen, "CLASE_BANCARIO", None) and str(valor).upper().startswith("CC"):
+                valor = defecto
+            self._cambiar_clase(clase, valor)
+        self._consec_guardados = empresa.get("consecutivos", {})
+        for tipo, var in self.vars_consec.items():
+            var.set(str(self._consec_guardados.get(tipo, 1)))
         self._refrescar()
 
     def _cambiar_clase(self, clase, nuevo=None):
@@ -255,10 +325,9 @@ class DialogoPlano(tk.Toplevel):
 
     def _refrescar(self, ver=None):
         self._pendiente = None
+        self._sincronizar_consecutivos(self._conteo_tipos())
         primer = self._primer()
         calc = self._calcular(primer)
-        n = calc["mov"].nunique()
-        self.var_rango.set(f"{n} comprobantes → hasta {primer + n - 1}" if primer else f"{n} comprobantes · consecutivo inválido")
 
         par = pd.Series(pd.factorize(calc["mov"])[0] % 2 == 1, index=calc.index)
         manual = (
@@ -320,7 +389,7 @@ class DialogoPlano(tk.Toplevel):
         mask = (self.lin["clase"] != bancario) & self.lin["detalle"].str.contains(
             self.gen.PATRON_RETIROS, case=False, regex=True, na=False)
         if not mask.any():
-            messagebox.showinfo("Retiros", "No hay retiros pendientes por pasar a CC.", parent=self)
+            messagebox.showinfo("Retiros", f"No hay retiros pendientes por pasar a {self.tipo_clase[bancario]}.", parent=self)
             return
         n = self.lin.loc[mask, "mov"].nunique()
         self.lin.loc[mask, "clase"] = bancario
@@ -416,17 +485,16 @@ class DialogoPlano(tk.Toplevel):
             return
         primer = self._primer()
         if not primer:
-            self._avisar("Consecutivo inválido", "Ingrese un primer consecutivo válido.")
+            self._avisar("Consecutivo inválido", "Ingrese un consecutivo válido para cada comprobante.")
             return
         if self._calcular(primer)["codpuc"].eq("").any():
             self._avisar("Cuenta faltante", "Existen líneas sin cuenta contable. Asígnela con doble clic en 'Cuenta contable'.")
             return
         self.resultado = {
             "lin": self.lin,
-            "consecutivo": primer,
+            "consecutivos": primer,
             "nit": self.var_nit.get().strip(),
             "clases": dict(self.tipo_clase),
-            "clave": self._clave_consec,
         }
         self.destroy()
 
@@ -434,9 +502,11 @@ class DialogoPlano(tk.Toplevel):
 def _guardar_parametros(resultado):
     cfg = _cargar_config()
     empresa = cfg.setdefault("empresas", {}).setdefault(resultado["nit"], {})
-    empresa.pop("consecutivos", None)
     empresa.setdefault("clases", {}).update(resultado["clases"])
-    empresa[resultado.get("clave", "consecutivo")] = resultado["consecutivo"] + int(resultado["lin"]["mov"].nunique())
+    conteo = resultado["lin"].drop_duplicates("mov")["tipo"].value_counts()
+    consecutivos = empresa.setdefault("consecutivos", {})
+    for tipo, inicio in resultado["consecutivos"].items():
+        consecutivos[tipo] = inicio + int(conteo.get(tipo, 0))
     cfg["ultimo_nit"] = resultado["nit"]
     _guardar_config(cfg)
 
@@ -452,7 +522,6 @@ def _con_carga(parent, texto, funcion):
 
     ven = tk.Toplevel(parent)
     ven.title("Archivo Plano")
-    ven.transient(parent)
     ven.resizable(False, False)
     ven.protocol("WM_DELETE_WINDOW", lambda: None)
     ttk.Label(ven, text=texto, font=FUENTE, padding=(20, 15, 20, 8)).pack()
@@ -463,7 +532,7 @@ def _con_carga(parent, texto, funcion):
     x = parent.winfo_rootx() + (parent.winfo_width() - ven.winfo_width()) // 2
     y = parent.winfo_rooty() + (parent.winfo_height() - ven.winfo_height()) // 2
     ven.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-    ven.grab_set()
+    _modal(ven, parent)
 
     hilo = threading.Thread(target=trabajo, daemon=True)
     hilo.start()
@@ -528,7 +597,7 @@ def generar_plano_con_dialogo(parent, excel_path, generador=None, confirmar=True
         ruta_plano = _con_carga(parent, "Generando archivo plano...", lambda: generador.generar(
             lin=resultado["lin"],
             nit_empresa=resultado["nit"],
-            primer_consecutivo=resultado["consecutivo"],
+            primer_consecutivo=resultado["consecutivos"],
             ruta_destino_final=ruta_destino,
         ))
     except Exception as e:
