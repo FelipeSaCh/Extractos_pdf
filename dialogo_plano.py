@@ -255,7 +255,13 @@ class DialogoPlano(tk.Toplevel):
         return False
 
     def _conteo_tipos(self):
-        return self.lin.drop_duplicates("mov")["tipo"].value_counts()
+        return self.gen.conteo_comprobantes(self.lin)
+
+    def _expandir(self, filas):
+        clave = self.gen.clave_comprobante(self.lin)
+        banco = self.lin["lado"] == self.gen.LADO_BANCO
+        sel = clave.loc[[f for f in filas if banco[f]]]
+        return sorted(set(filas) | set(self.lin.index[banco & clave.isin(sel)]))
 
     def _primer(self):
         valores = {t: self._entero(self.vars_consec[t].get()) if t in self.vars_consec else None
@@ -329,7 +335,7 @@ class DialogoPlano(tk.Toplevel):
         primer = self._primer()
         calc = self._calcular(primer)
 
-        par = pd.Series(pd.factorize(calc["mov"])[0] % 2 == 1, index=calc.index)
+        par = pd.Series(pd.factorize(calc["tipo"] + calc["numero"])[0] % 2 == 1, index=calc.index)
         manual = (
             (calc["codpuc_manual"] != "") | (calc["tercero_manual"] != "")
             | (calc["tipo"] != calc["clase"].map(self.tipo_clase))
@@ -439,6 +445,8 @@ class DialogoPlano(tk.Toplevel):
         editor.bind("<Escape>", lambda e: cerrar(False))
 
     def _asignar(self, campo, filas, valor):
+        ver = str(filas[0])
+        filas = self._expandir(filas)
         valor = str(valor or "").strip()
         if campo == "tipo":
             tipo = self._normalizar(valor)
@@ -456,7 +464,7 @@ class DialogoPlano(tk.Toplevel):
             self.lin.loc[filas, "tercero_manual"] = valor
         else:
             self.lin.loc[filas, "docrela"] = valor
-        self._refrescar(ver=str(filas[0]))
+        self._refrescar(ver=ver)
         return True
 
     def _filas_seleccionadas(self):
@@ -475,10 +483,12 @@ class DialogoPlano(tk.Toplevel):
         filas = self._filas_seleccionadas()
         if not filas:
             return
+        ver = str(filas[0])
+        filas = self._expandir(filas)
         mask = self.lin["mov"].isin(self.lin.loc[filas, "mov"].unique())
         self.lin.loc[mask, "tipo"] = self.lin.loc[mask, "clase"].map(self.tipo_clase)
         self.lin.loc[filas, ["codpuc_manual", "tercero_manual", "docrela"]] = ""
-        self._refrescar(ver=str(filas[0]))
+        self._refrescar(ver=ver)
 
     def _confirmar(self, _=None):
         if not all(self._cambiar_clase(c) for c in self.predeterminados):
@@ -495,6 +505,7 @@ class DialogoPlano(tk.Toplevel):
             "consecutivos": primer,
             "nit": self.var_nit.get().strip(),
             "clases": dict(self.tipo_clase),
+            "conteo": self._conteo_tipos().to_dict(),
         }
         self.destroy()
 
@@ -503,7 +514,7 @@ def _guardar_parametros(resultado):
     cfg = _cargar_config()
     empresa = cfg.setdefault("empresas", {}).setdefault(resultado["nit"], {})
     empresa.setdefault("clases", {}).update(resultado["clases"])
-    conteo = resultado["lin"].drop_duplicates("mov")["tipo"].value_counts()
+    conteo = resultado["conteo"]
     consecutivos = empresa.setdefault("consecutivos", {})
     for tipo, inicio in resultado["consecutivos"].items():
         consecutivos[tipo] = inicio + int(conteo.get(tipo, 0))

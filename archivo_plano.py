@@ -71,13 +71,20 @@ class GeneradorArchivoPlano:
         CLASE_RECIBO: "RC1",
         CLASE_BANCARIO: "AJB",
     }
+
+    DETALLE_CONTRAPARTIDA = {
+        CLASE_EGRESO: "TOTAL EGRESOS",
+        CLASE_NOMINA: "TOTAL PAGOS DE NOMINA",
+        CLASE_RECIBO: "TOTAL RECAUDOS",
+        CLASE_BANCARIO: "TOTAL MOVIMIENTOS BANCARIOS",
+    }
     PREFIJOS_BANCARIO = ("AJ", "CC")
     ORDEN_PREFIJOS = {"AJ": 0, "CC": 0, "EG": 1, "RC": 2}
 
     LADO_BANCO = "BANCO"
     LADO_CONTRA = "CONTRA"
 
-    PATRON_NOMINA = r"PAGO\s+(?:A\s+|DE\s+)?N[OÓ]MIN"
+    PATRON_NOMINA = r"PAGO\s+(?:A\s+|DE\s+)?N[OÓ]MIN\w*"
     DETALLE_NOMINA = "PAGO A NOMIN"
 
     MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
@@ -255,17 +262,21 @@ class GeneradorArchivoPlano:
         if not mask.any():
             return mov
 
+        benef = mov.loc[mask, 'detalle'].str.extract(
+            rf"(?i){self.PATRON_NOMINA}[\s:\-]*(.*)$", expand=False).fillna("").str.strip()
         agrupado = (
-            mov[mask]
-            .groupby(['ano', 'mes', 'dia'], as_index=False, dropna=False)['valor'].sum()
-            .assign(
-                clase=self.CLASE_NOMINA,
-                desc="",
-                detalle=self.DETALLE_NOMINA,
-                tercero="",
-                codpuc_contra="",
-            )
+            mov[mask].assign(_benef=benef)
+            .groupby(['ano', 'mes', 'dia'], as_index=False, dropna=False)
+            .agg(valor=('valor', 'sum'),
+                 _benef=('_benef', lambda s: ", ".join(dict.fromkeys(v for v in s if v))))
         )
+        agrupado = agrupado.assign(
+            clase=self.CLASE_NOMINA,
+            desc="",
+            detalle=(self.DETALLE_NOMINA + " " + agrupado['_benef']).str.strip(),
+            tercero="",
+            codpuc_contra="",
+        ).drop(columns='_benef')
         agrupado = agrupado[agrupado['valor'] != 0]
 
         return pd.concat([mov[~mask], agrupado], ignore_index=True)
@@ -325,11 +336,53 @@ class GeneradorArchivoPlano:
         )
         return lin.assign(codpuc_manual="", tercero_manual="", docrela="")
 
+    @staticmethod
+    def clave_comprobante(df):
+        return (df['tipo'].fillna("").astype(str).str.strip().str.upper() + "|"
+                + df['ano'].astype(str) + "|" + df['mes'].astype(str))
+
+    def conteo_comprobantes(self, lin):
+        return lin.assign(_clave=self.clave_comprobante(lin)).drop_duplicates('_clave')['tipo'].value_counts()
+
+    def _consolidar_banco(self, banco):
+        if banco.empty:
+            return banco
+        primero = lambda s: next((v for v in s if v), "")
+        agg = (
+            banco.assign(_clave=self.clave_comprobante(banco), _idx=banco.index)
+            .groupby('_clave', sort=False)
+            .agg(_idx=('_idx', 'first'), mov=('mov', 'first'), tipo=('tipo', 'first'), clase=('clase', 'first'),
+                 lado=('lado', 'first'), ano=('ano', 'first'), mes=('mes', 'first'), valor=('valor', 'sum'),
+                 codpuc_manual=('codpuc_manual', primero), tercero_manual=('tercero_manual', primero),
+                 docrela=('docrela', primero))
+        )
+        agg = agg[agg['valor'].round(2) != 0]
+        if agg.empty:
+            return agg.set_index('_idx').rename_axis(None)
+
+        valida = agg['mes'].between(1, 12) & agg['ano'].notna()
+        fin_mes = pd.to_datetime(pd.DataFrame({
+            'year': agg['ano'].where(valida, 2000).astype(int),
+            'month': agg['mes'].where(valida, 1).astype(int),
+            'day': 1,
+        })) + pd.offsets.MonthEnd(0)
+        periodo = (agg['mes'].where(valida, 1).astype(int).map(lambda m: self.MESES[m - 1]) + " "
+                   + agg['ano'].where(valida, 0).astype(int).astype(str)).where(valida, "")
+        agg['dia'] = fin_mes.dt.day.where(valida)
+        agg['detalle'] = (agg['clase'].map(self.DETALLE_CONTRAPARTIDA).fillna("TOTAL " + agg['tipo'])
+                          + " " + periodo).str.strip()
+        agg['tercero_ref'] = ""
+        agg['codpuc_contra'] = ""
+        return agg.set_index('_idx').rename_axis(None)
+
     def calcular(self, lin, nit_empresa="", primer_consecutivo=1):
         df = lin.copy()
         for col in ['codpuc_contra', 'tercero_ref', 'codpuc_manual', 'tercero_manual', 'docrela']:
             df[col] = df[col].fillna("").astype(str)
         df['tipo'] = df['tipo'].fillna("").astype(str).str.strip().str.upper()
+
+        es_banco = df['lado'] == self.LADO_BANCO
+        df = pd.concat([df[~es_banco], self._consolidar_banco(df[es_banco])])
 
         prefijo = df['tipo'].str[:2]
         entrada = df['valor'] > 0
@@ -365,18 +418,20 @@ class GeneradorArchivoPlano:
         df['credito'] = importe.where(~en_debito)
 
         df = (
-            df.assign(_rango=prefijo.map(self.ORDEN_PREFIJOS).fillna(len(self.ORDEN_PREFIJOS)), _credito=~en_debito)
-            .sort_values(['_rango', 'tipo', 'ano', 'mes', 'dia', 'detalle', 'mov', '_credito'],
+            df.assign(_rango=prefijo.map(self.ORDEN_PREFIJOS).fillna(len(self.ORDEN_PREFIJOS)),
+                      _banco=es_banco, _credito=~en_debito)
+            .sort_values(['_rango', 'tipo', 'ano', 'mes', '_banco', 'dia', 'detalle', 'mov', '_credito'],
                          kind='stable', na_position='last')
-            .drop(columns=['_rango', '_credito'])
+            .drop(columns=['_rango', '_banco', '_credito'])
         )
-        movs = df.drop_duplicates('mov')[['mov', 'tipo']]
+        clave = self.clave_comprobante(df)
+        comps = df.assign(_clave=clave).drop_duplicates('_clave')[['_clave', 'tipo']]
         if isinstance(primer_consecutivo, dict):
-            inicio = movs['tipo'].map(lambda t: self._a_entero(primer_consecutivo.get(t, 1)))
+            inicio = comps['tipo'].map(lambda t: self._a_entero(primer_consecutivo.get(t, 1)))
         else:
-            inicio = pd.Series(self._a_entero(primer_consecutivo), index=movs.index)
-        numeros = inicio + movs.groupby('tipo').cumcount()
-        df['numero'] = df['mov'].map(dict(zip(movs['mov'], numeros))).map(lambda n: f"{n:010d}")
+            inicio = pd.Series(self._a_entero(primer_consecutivo), index=comps.index)
+        numeros = inicio + comps.groupby('tipo').cumcount()
+        df['numero'] = clave.map(dict(zip(comps['_clave'], numeros))).map(lambda n: f"{n:010d}")
         return df
 
 
