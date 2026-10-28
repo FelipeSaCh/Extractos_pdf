@@ -92,6 +92,14 @@ class GeneradorArchivoPlano:
 
     def __init__(self, ruta_excel_origen):
         self.ruta_origen = ruta_excel_origen
+        self.cuenta_bancaria = ""
+
+    def _leer_cuenta_bancaria(self):
+        try:
+            info = pd.read_excel(self.ruta_origen, sheet_name="Info", dtype=str).fillna("")
+            return next(iter(info.loc[info["CLAVE"] == "CUENTA BANCARIA", "VALOR"]), "").strip()
+        except Exception:
+            return ""
 
     @staticmethod
     def _columna(df, candidatos):
@@ -249,7 +257,9 @@ class GeneradorArchivoPlano:
             'mes': fin_mes.dt.month,
             'dia': fin_mes.dt.day,
             'desc': "",
-            'detalle': grp['concepto'] + " " + fin_mes.dt.month.map(lambda m: self.MESES[m - 1]) + " " + fin_mes.dt.year.astype(str),
+            'detalle': (grp['concepto'] + " " + fin_mes.dt.month.map(lambda m: self.MESES[m - 1]) + " "
+                        + fin_mes.dt.year.astype(str)
+                        + (f" CUENTA {self.cuenta_bancaria}" if self.cuenta_bancaria else "")),
             'tercero': "",
             'valor': grp['valor'],
             'codpuc_contra': grp['concepto'].map(self.CODPUC_BANCARIOS).fillna(""),
@@ -316,6 +326,7 @@ class GeneradorArchivoPlano:
             df = pd.read_excel(self.ruta_origen, sheet_name="Datos")
         except ValueError:
             raise ValueError("El archivo seleccionado no contiene la hoja 'Datos'.")
+        self.cuenta_bancaria = self._leer_cuenta_bancaria()
         df = self._normalizar_columnas(df)
         if "VALOR" not in df.columns:
             raise ValueError("No se identificó la columna de valor (VALOR o DÉBITOS/CRÉDITOS) en la hoja 'Datos'.")

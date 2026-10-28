@@ -1,8 +1,9 @@
 import os
 import re
-
+import pdfplumber
 import pandas as pd
 from openpyxl.styles import Font
+import unicodedata
 
 DELIMITADOR = "|||"
 FORMATO_MONEDA = '"$"#,##0.00;[Red]("$"#,##0.00);"-"'
@@ -15,6 +16,47 @@ _PATRON_FINANCIERO = re.compile(r"^-?[\d.,]+$")
 _PATRON_PAG = re.compile(r"(?i)^p[áa]g(?:ina)?\.?$")
 _SECUENCIA_PAG = (re.compile(r"^\d+$"), re.compile(r"(?i)^de\.?$"), re.compile(r"^\d+$"))
 
+HOJA_INFO = "Info"
+CLAVE_CUENTA = "CUENTA BANCARIA"
+
+FRASES_CUENTA = (
+    "NUMERO DE CUENTA", "NUMERO DE LA CUENTA", "NO. DE CUENTA", "NO DE CUENTA", "NRO. CUENTA", "NRO CUENTA",
+    "CUENTA NO.", "CUENTA NO", "CUENTA NRO.", "CUENTA NRO", "CUENTA N°", "CUENTA #",
+    "CUENTA DE AHORROS", "CUENTA AHORROS", "CUENTA CORRIENTE", "CTA. AHORROS", "CTA AHORROS",
+    "CTA. CORRIENTE", "CTA CORRIENTE", "CTA.", "CTA", "NUMERO DE PRODUCTO", "PRODUCTO","NÚMERO",
+)
+_NUMERO_CUENTA = r"[^\d\n]{0,25}\n?[^\d\n]{0,10}(\d[\d -]{4,24}\d)"
+
+
+def _sin_tildes(texto):
+    return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode().upper()
+
+
+def _patron_frase(frase):
+    palabras = [re.escape(p) for p in _sin_tildes(frase).split()]
+    return re.compile(r"(?<![A-Z])" + r"\s*".join(palabras) + r"(?![A-Z])" + _NUMERO_CUENTA)
+
+
+_PATRONES_CUENTA = [_patron_frase(f) for f in FRASES_CUENTA]
+
+
+def buscar_cuenta_bancaria(texto, frases=None):
+    texto = _sin_tildes(texto or "")
+    for patron in [_patron_frase(f) for f in frases or ()] + _PATRONES_CUENTA:
+        for m in patron.finditer(texto):
+            numero = re.sub(r"\s", "", m[1])
+            if sum(c.isdigit() for c in numero) >= 6:
+                return numero
+    return ""
+
+
+def extraer_cuenta_bancaria(pdf_path, frases=None):
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            texto = "\n".join(p.extract_text() or "" for p in pdf.pages[:2])
+    except Exception:
+        return ""
+    return buscar_cuenta_bancaria(texto, frases)
 
 def obtener_ruta_asset(ruta_relativa):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), ruta_relativa)
@@ -135,15 +177,14 @@ def _intercalar_resumenes(columnas, col_desc, bloques, resumen_general):
     return pd.concat(partes, ignore_index=True), negritas
 
 
-def reorganizar_excel(excel_path, saldo_anterior=None, saldo_actual=None):
+def reorganizar_excel(excel_path, saldo_anterior=None, saldo_actual=None, cuenta_bancaria=None):
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"No se encontró el archivo: {excel_path}")
     with pd.ExcelFile(excel_path) as xl:
         df = pd.read_excel(xl, sheet_name="Datos" if "Datos" in xl.sheet_names else 0, dtype=str)
-    if "FECHA" in df.columns:
-        df = df[df["FECHA"].fillna("").str.strip().ne("")].reset_index(drop=True)
-    if "VALOR" not in df.columns or df.empty:
-        return excel_path
+        if cuenta_bancaria is None and HOJA_INFO in xl.sheet_names:
+            info = pd.read_excel(xl, sheet_name=HOJA_INFO, dtype=str).fillna("")
+            cuenta_bancaria = next(iter(info.loc[info["CLAVE"] == CLAVE_CUENTA, "VALOR"]), "")
 
     col_desc = "DESCRIPCIÓN" if "DESCRIPCIÓN" in df.columns else "DESCRIPCION"
     valores = a_numero(df["VALOR"])
@@ -190,6 +231,9 @@ def reorganizar_excel(excel_path, saldo_anterior=None, saldo_actual=None):
         datos.to_excel(writer, sheet_name="Datos", index=False)
         resumen.to_excel(writer, sheet_name="Resumen", index=False)
         conceptos.to_excel(writer, sheet_name="Conceptos", index=False)
+        if cuenta_bancaria:
+            pd.DataFrame({"CLAVE": [CLAVE_CUENTA], "VALOR": [str(cuenta_bancaria)]}).to_excel(
+                writer, sheet_name=HOJA_INFO, index=False)
         libro = writer.book
         for ws in libro.worksheets:
             _formato_moneda(ws)
@@ -206,10 +250,12 @@ def reorganizar_excel(excel_path, saldo_anterior=None, saldo_actual=None):
     return excel_path
 
 
-def exportar(lineas, columnas, ruta_origen, output_excel_path=None, saldo_anterior=None, saldo_actual=None):
+def exportar(lineas, columnas, ruta_origen, output_excel_path=None, saldo_anterior=None, saldo_actual=None,
+             frases_cuenta=None):
     output_excel_path = output_excel_path or f"{os.path.splitext(ruta_origen)[0]}_convertido.xlsx"
     with open(f"{os.path.splitext(output_excel_path)[0]}_plano.txt", "w", encoding="utf-8") as f:
         f.write("\n".join([DELIMITADOR.join(columnas), *lineas]))
     texto_delimitado_a_excel(lineas, columnas, output_excel_path)
-    reorganizar_excel(output_excel_path, saldo_anterior, saldo_actual)
+    reorganizar_excel(output_excel_path, saldo_anterior, saldo_actual,
+                      extraer_cuenta_bancaria(ruta_origen, frases_cuenta))
     return output_excel_path
