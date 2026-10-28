@@ -258,6 +258,8 @@ class DialogoPlano(tk.Toplevel):
         return self.gen.conteo_comprobantes(self.lin)
 
     def _expandir(self, filas):
+        if "lado" not in self.lin.columns:
+            return sorted(filas)
         clave = self.gen.clave_comprobante(self.lin)
         banco = self.lin["lado"] == self.gen.LADO_BANCO
         sel = clave.loc[[f for f in filas if banco[f]]]

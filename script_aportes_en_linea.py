@@ -18,6 +18,12 @@ PATRON_LIQ = re.compile(
     re.M,
 )
 PATRON_NIT = re.compile(r"\bNIT\s*:?\s*(\d{5,15})")
+_E = r"[ \t]+"
+PATRON_MORA = re.compile(
+    rf"^[ \t]*(?P<adm>\S.*?){_E}(?P<cod>\S+){_E}(?P<nit>\d{{1,3}}(?:[.,]\d{{3}}){{2,}}|\d{{6,15}})(?:{_E}\d)?{_E}\d+"
+    rf"{_E}\$?[ \t]*[\d.,]+{_E}\$?[ \t]*(?P<mora>[\d.,]+){_E}\$?[ \t]*-?[\d.,]+{_E}\$?[ \t]*[\d.,]+[ \t]*$",
+    re.M,
+)
 
 ADMINISTRADORAS_PILA = {
     "25-14": ("900336004", "COLPENSIONES"),
@@ -79,12 +85,24 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
     def _leer_excel(self):
         hojas = pd.read_excel(self.ruta_origen, sheet_name=None, header=None, dtype=object)
         libros = [[[_celda(v) for v in f] for f in df.itertuples(index=False)] for df in hojas.values()]
+        textos = ["\n".join(" ".join(c.replace("\n", " ") for c in f if c) for f in l) for l in libros]
         for marca in self.MARCAS_HOJA:
-            filas = next((l for l in libros if any(marca in _normalizar(c) for f in l for c in f)), None)
-            if filas:
-                texto = "\n".join(" ".join(c.replace("\n", " ") for c in f if c) for f in filas)
-                return texto, [filas]
+            idx = next((i for i, l in enumerate(libros) if any(marca in _normalizar(c) for f in l for c in f)), None)
+            if idx is not None:
+                return "\n".join([textos[idx]] + [t for i, t in enumerate(textos) if i != idx]), [libros[idx]]
         raise ValueError("No se encontró la hoja 'Planilla Resumen' en el Excel.")
+
+    @staticmethod
+    def _moras(texto):
+        moras = {}
+        for m in PATRON_MORA.finditer(texto):
+            monto = _valor(m["mora"])
+            if not monto:
+                continue
+            nit = re.sub(r"\D", "", m["nit"])
+            nombre, previo = moras.get(nit, (m["adm"].strip(), 0.0))
+            moras[nit] = (nombre, previo + monto)
+        return moras
 
     def _leer_pdf_tablas(self):
         textos, bloques = [], []
@@ -181,12 +199,17 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
                     sin_cuenta.append(f"{grupo} {codigo} {nombre}".strip())
                 filas.append(self._fila(cuenta, nit, nombre or codigo, debito=monto))
 
-        total = sum(aportes.values())
+        moras = self._moras(texto)
+        for nit, (nombre, monto) in moras.items():
+            filas.append(self._fila(self.CODPUC_INTERESES_MORA, nit, nombre, debito=monto))
+
+        total = sum(aportes.values()) + sum(m for _, m in moras.values())
         pagado = _valor(liq["valor"])
         mora = round(pagado - total, 2)
         if mora < -1:
-            raise ValueError(f"La suma de aportes ({total:,.0f}) supera el valor pagado ({pagado:,.0f}).")
+            raise ValueError(f"La suma de aportes e intereses ({total:,.0f}) supera el valor pagado ({pagado:,.0f}).")
         if mora > 1:
+            filas.append(self._fila(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, debito=mora))
             filas.append(self._fila(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, debito=mora))
 
         self.advertencias = (

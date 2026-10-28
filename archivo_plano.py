@@ -57,7 +57,7 @@ class GeneradorArchivoPlano:
     CODPUC_NOMINA = "250505001"
     CODPUC_GASTO_BANCARIO = "530505001"
     CODPUC_RETIROS = "110505001"
-    CLAVE_CONSECUTIVO="consecutivo"
+    CLAVE_CONSECUTIVO = "consecutivo"
     PATRON_RETIROS = r"\bRETIROS?\b"
 
     CLASE_EGRESO = "EGRESO"
@@ -334,31 +334,36 @@ class GeneradorArchivoPlano:
             .rename_axis('mov')
             .reset_index()
         )
-        return lin.assign(codpuc_manual="", tercero_manual="", docrela="")
+        return lin.assign(codpuc_manual="", tercero_manual="", docrela="", archivo=0)
 
-    @staticmethod
-    def clave_comprobante(df):
-        return (df['tipo'].fillna("").astype(str).str.strip().str.upper() + "|"
-                + df['ano'].astype(str) + "|" + df['mes'].astype(str))
+    def clave_comprobante(self, df):
+        tipo = df['tipo'].fillna("").astype(str).str.strip().str.upper()
+        archivo = df['archivo'].astype(str) if 'archivo' in df.columns else "0"
+        periodo = df['ano'].astype(str) + "|" + df['mes'].astype(str)
+        grupo = periodo.where(tipo.str[:2].isin(self.PREFIJOS_BANCARIO), "M" + df['mov'].astype(str))
+        return tipo + "|" + archivo + "|" + grupo
 
     def conteo_comprobantes(self, lin):
         return lin.assign(_clave=self.clave_comprobante(lin)).drop_duplicates('_clave')['tipo'].value_counts()
 
     def _consolidar_banco(self, banco):
+        mensual = banco['tipo'].str[:2].isin(self.PREFIJOS_BANCARIO)
+        individuales = banco[~mensual].assign(tercero_ref="")
+        banco = banco[mensual]
         if banco.empty:
-            return banco
+            return individuales
         primero = lambda s: next((v for v in s if v), "")
         agg = (
             banco.assign(_clave=self.clave_comprobante(banco), _idx=banco.index)
             .groupby('_clave', sort=False)
             .agg(_idx=('_idx', 'first'), mov=('mov', 'first'), tipo=('tipo', 'first'), clase=('clase', 'first'),
-                 lado=('lado', 'first'), ano=('ano', 'first'), mes=('mes', 'first'), valor=('valor', 'sum'),
-                 codpuc_manual=('codpuc_manual', primero), tercero_manual=('tercero_manual', primero),
-                 docrela=('docrela', primero))
+                 lado=('lado', 'first'), archivo=('archivo', 'first'), ano=('ano', 'first'), mes=('mes', 'first'),
+                 valor=('valor', 'sum'), codpuc_manual=('codpuc_manual', primero),
+                 tercero_manual=('tercero_manual', primero), docrela=('docrela', primero))
         )
         agg = agg[agg['valor'].round(2) != 0]
         if agg.empty:
-            return agg.set_index('_idx').rename_axis(None)
+            return individuales
 
         valida = agg['mes'].between(1, 12) & agg['ano'].notna()
         fin_mes = pd.to_datetime(pd.DataFrame({
@@ -373,10 +378,12 @@ class GeneradorArchivoPlano:
                           + " " + periodo).str.strip()
         agg['tercero_ref'] = ""
         agg['codpuc_contra'] = ""
-        return agg.set_index('_idx').rename_axis(None)
+        return pd.concat([individuales, agg.set_index('_idx').rename_axis(None)])
 
     def calcular(self, lin, nit_empresa="", primer_consecutivo=1):
         df = lin.copy()
+        if 'archivo' not in df.columns:
+            df['archivo'] = 0
         for col in ['codpuc_contra', 'tercero_ref', 'codpuc_manual', 'tercero_manual', 'docrela']:
             df[col] = df[col].fillna("").astype(str)
         df['tipo'] = df['tipo'].fillna("").astype(str).str.strip().str.upper()
@@ -385,13 +392,14 @@ class GeneradorArchivoPlano:
         df = pd.concat([df[~es_banco], self._consolidar_banco(df[es_banco])])
 
         prefijo = df['tipo'].str[:2]
+        mensual = prefijo.isin(self.PREFIJOS_BANCARIO)
         entrada = df['valor'] > 0
         es_banco = df['lado'] == self.LADO_BANCO
         en_debito = es_banco == entrada
 
         contra = np.select(
             [
-                prefijo.isin(self.PREFIJOS_BANCARIO),
+                mensual,
                 (prefijo == "EG") & (df['clase'] == self.CLASE_NOMINA),
                 prefijo == "EG",
                 prefijo == "RC",
@@ -419,10 +427,11 @@ class GeneradorArchivoPlano:
 
         df = (
             df.assign(_rango=prefijo.map(self.ORDEN_PREFIJOS).fillna(len(self.ORDEN_PREFIJOS)),
-                      _banco=es_banco, _credito=~en_debito)
-            .sort_values(['_rango', 'tipo', 'ano', 'mes', '_banco', 'dia', 'detalle', 'mov', '_credito'],
-                         kind='stable', na_position='last')
-            .drop(columns=['_rango', '_banco', '_credito'])
+                      _banco=es_banco, _credito=~en_debito,
+                      _dia=df['dia'].where(~mensual, 0), _mov=df['mov'].where(~mensual, -1))
+            .sort_values(['archivo', '_rango', 'tipo', 'ano', 'mes', '_dia', '_mov', '_banco', 'dia', 'detalle',
+                          'mov', '_credito'], kind='stable', na_position='last')
+            .drop(columns=['_rango', '_banco', '_credito', '_dia', '_mov'])
         )
         clave = self.clave_comprobante(df)
         comps = df.assign(_clave=clave).drop_duplicates('_clave')[['_clave', 'tipo']]
@@ -433,7 +442,6 @@ class GeneradorArchivoPlano:
         numeros = inicio + comps.groupby('tipo').cumcount()
         df['numero'] = clave.map(dict(zip(comps['_clave'], numeros))).map(lambda n: f"{n:010d}")
         return df
-
 
     def generar(self, lin=None, nit_empresa="", primer_consecutivo=1, ruta_destino_final=None):
         if not ruta_destino_final:
@@ -468,3 +476,22 @@ class GeneradorArchivoPlano:
         self._convertir_a_excel_95(ruta_temp_xlsx, ruta_destino_final)
 
         return ruta_destino_final
+
+
+class GeneradorExtractosMultiples(GeneradorArchivoPlano):
+    def __init__(self, rutas):
+        super().__init__(rutas[0])
+        self.generadores = [GeneradorArchivoPlano(r) for r in rutas]
+
+    def preparar(self):
+        partes, base = [], 0
+        for archivo, gen in enumerate(self.generadores):
+            try:
+                lin = gen.preparar()
+            except Exception as e:
+                raise ValueError(f"{os.path.basename(gen.ruta_origen)}:\n{e}") from e
+            if lin.empty:
+                continue
+            partes.append(lin.assign(mov=lin['mov'] + base, archivo=archivo))
+            base += int(lin['mov'].max()) + 1
+        return pd.concat(partes, ignore_index=True) if partes else pd.DataFrame()

@@ -610,41 +610,89 @@ class PDFViewerApp:
     def cargar_y_procesar_pdf(self, prefijo_tipo):
         es_ss = prefijo_tipo == "SeguridadSocial"
         acepta_excel = es_ss and self._es_aportes_en_linea()
-        titulo = f"Seleccionar {'PDF o Excel' if acepta_excel else 'PDF'} de {prefijo_tipo}"
+        titulo = f"Seleccionar {'PDF o Excel' if acepta_excel else 'PDF'} de {prefijo_tipo} (puede elegir varias)"
         tipos = [("PDF o Excel", "*.pdf;*.xlsx;*.xls")] if acepta_excel else [("Archivos PDF", "*.pdf")]
-
-        if es_ss:
-            rutas = list(filedialog.askopenfilenames(title=f"{titulo} (puede elegir varias)", filetypes=tipos))
-        else:
-            ruta = filedialog.askopenfilename(title=titulo, filetypes=tipos)
-            rutas = [ruta] if ruta else []
-
+        rutas = list(filedialog.askopenfilenames(title=titulo, filetypes=tipos))
         if not rutas:
             return
 
         try:
             rutas = [self._con_prefijo(r, prefijo_tipo) for r in rutas]
             file_path = rutas[0]
+            self.tipo_documento = prefijo_tipo
 
-            if len(rutas) > 1 or (acepta_excel and not file_path.lower().endswith(".pdf")):
+            if es_ss and (len(rutas) > 1 or (acepta_excel and not file_path.lower().endswith(".pdf"))):
                 self._procesar_seguridad_social(rutas)
+                return
+            if len(rutas) > 1:
+                self._procesar_extractos_multiples(rutas)
                 return
 
             self.current_pdf_path = file_path
-            self.tipo_documento = prefijo_tipo
             self.load_pdf(file_path)
-
-            if hasattr(self, "btn_limpiar") and self.btn_limpiar:
-                try:
-                    self.btn_limpiar.configure(state="normal")
-                except Exception:
-                    self.btn_limpiar.config(state="normal")
+            self.btn_limpiar.config(state="normal")
 
         except Exception as e:
             messagebox.showerror(
                 "Error al renombrar",
                 f"No se pudo asignar el nombre al archivo:\n{str(e)}",
             )
+
+    def _exportador_banco(self):
+        banco = self.combo_bancos.get()
+        for prefijo, fn in (("Banco de Bogotá", exportar_bogota), ("Nequi", exportar_nequi),
+                            ("Bancolombia", exportar_bancolombia), ("Davivienda", exportar_davivienda)):
+            if banco.startswith(prefijo):
+                return fn
+        return None
+
+    def _procesar_extractos_multiples(self, rutas):
+        exportador = self._exportador_banco()
+        if exportador is None:
+            messagebox.showerror("Error de Módulo",
+                                 f"No se pudo importar el script del banco seleccionado:\n{_import_error_msg}")
+            return
+
+        self.root.config(cursor="watch")
+        self._set_botones_bloqueados(True)
+        self.iniciar_progreso(f"Procesando 0/{len(rutas)} archivos...")
+        self.info_label.config(text="⏳ Procesando extractos...", style="Info.TLabel")
+
+        def tarea(cola):
+            excels = []
+            for i, ruta in enumerate(rutas):
+                nombre = os.path.basename(ruta)
+                cola.put(("progreso", i / len(rutas) * 100, f"Procesando {i + 1}/{len(rutas)}: {nombre}"))
+                try:
+                    excel = exportador(ruta, output_excel_path=f"{os.path.splitext(ruta)[0]}.xlsx")
+                except Exception as e:
+                    raise ValueError(f"{nombre}:\n{e}") from e
+                if not excel:
+                    raise ValueError(f"{nombre}:\nNo se obtuvieron registros del documento procesado.")
+                excels.append(excel)
+            cola.put(("exito", excels, None))
+
+        self.trabajador.ejecutar(
+            tarea,
+            on_progreso=self.actualizar_progreso,
+            on_exito=self._on_extractos_multiples,
+            on_error=self._on_error_process_pdf,
+        )
+
+    def _on_extractos_multiples(self, excels):
+        from archivo_plano import GeneradorExtractosMultiples
+
+        self.root.config(cursor="")
+        self._set_botones_bloqueados(False)
+        self.pdf_engine.last_excel_path = excels[-1]
+        self.btn_open_excel.config(state=tk.NORMAL, style="Secondary.TButton")
+        self.btn_limpiar.config(state="normal")
+        self.cargar_excel_en_gui(excels[-1])
+        self.finalizar_progreso(f"{len(excels)} extractos procesados")
+        nombres = "\n".join(os.path.basename(e) for e in excels)
+        self.info_label.config(text=f"✅ Excel generados:\n{nombres}", style="Status.TLabel")
+        messagebox.showinfo("Proceso Exitoso", f"¡Extracción completada!\n\nArchivos generados:\n{nombres}")
+        generar_plano_con_dialogo(self.root, excels[0], generador=GeneradorExtractosMultiples(excels), pedir_ruta=True)
 
     def load_pdf(self, file_path):
         while True:
