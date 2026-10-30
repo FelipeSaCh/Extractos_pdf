@@ -17,10 +17,9 @@ def _movimientos_pagina(page):
         return []
 
     ordenadas = sorted(words, key=lambda w: (w["top"], w["x0"]))
-    y_ini = next((w["top"] for w in ordenadas
-                  if "FECHA" in w["text"].strip().upper() and w["top"] > alto * 0.35), alto * 0.50)
-    y_fin = next((w["top"] - 3 for w in ordenadas
-                  if w["top"] > y_ini and any(t in w["text"].strip().upper() for t in TEXTOS_FIN)), alto)
+    y_ini = next((w["top"] for w in ordenadas if w["text"].strip().upper().startswith("DESCRIPCI")), 0)
+    y_fin = next((l["top"] - 3 for l in page.extract_text_lines()
+                  if l["top"] > y_ini and any(t in l["text"].upper() for t in TEXTOS_FIN)), alto)
     tabla = [w for w in words if y_ini <= w["top"] < y_fin]
 
     x_fecha, x_desc, x_valor = ancho * 0.30, ancho * 0.65, ancho * 0.82
