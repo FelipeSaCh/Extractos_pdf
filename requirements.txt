@@ -1,6 +1,8 @@
-
 pdfplumber
 openpyxl
 pandas
+numpy
 pypdfium2
 pillow
+pywin32; sys_platform == "win32"
+pytest

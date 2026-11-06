@@ -36,25 +36,28 @@ La herramienta consta de una interfaz gráfica de escritorio (GUI) interactiva q
 
 ## 🛠️ Arquitectura de Desarrollo
 
-La solución está desarrollada bajo una estructura modular en **Python 3**:
+Arquitectura por capas en **Python 3.10+**. Cada capa sólo depende de las inferiores:
 
-* **`app_gui.py`**: Interfaz gráfica creada con `tkinter`. Controla la selección de banco, la interacción del usuario y hospeda los componentes visuales. Incorpora hilos secundarios (`worker_manager.py`) para evitar el bloqueo del hilo principal al procesar y renderizar PDFs.
-* **`pdf_engine.py`**: Motor encargado de renderizar y manipular las páginas del PDF visualmente con `PyMuPDF` (`fitz`), incluyendo soporte para descifrar archivos protegidos por contraseña.
-* **`script.py`**: Procesador de extractos de **Bancolombia** mediante lectura geométrica con `pdfplumber` y segmentación espacial de columnas.
-* **`script_ban_bogota.py`**: Procesador específico para extractos de **Banco de Bogotá (PyME)**, empleando anclaje dinámico por fechas y coordenadas optimizadas.
-* **`script_nequi.py`**: Procesador específico para extractos de **Nequi**, empleando anclaje dinámico por fechas y coordenadas optimizadas.
-* **`clasificador_conceptos.py`**: Módulo interactivo que permite clasificar contablemente los movimientos directamente desde la GUI del Excel generado.
-* **`parser_excel.py`**: Lector de archivos de Excel procesados para su integración y visualización en el panel del programa.
-* **`ui_theme.py`**: Centraliza el estilo visual de la interfaz gráfica (colores, fuentes y elementos comunes como el cuadro de advertencias).
-* **`worker_manager.py`**: Administrador de hilos secundarios en segundo plano para Tkinter, evitando que la aplicación quede "No responde".
-* **`requirements.txt`**: Lista de dependencias del proyecto.
+```
+presentacion  →  servicios  →  extractores / infraestructura  →  nucleo
+```
+
+| Capa | Contenido |
+|---|---|
+| `nucleo/` | Constantes, rutas (`config.py`), conversión de montos y fechas, normalización de texto, validaciones. Sin E/S. |
+| `infraestructura/` | PDF (`pdf_engine.py`, `lectura_pdf.py`), Excel y conversión 5.0/95 (`excel.py`), `administradoras.json`, actualizador. |
+| `extractores/` | Un módulo por banco con `extraer(ruta, progreso, **opciones) -> Extraccion`. |
+| `servicios/` | Registro de fuentes, libro del extracto, archivo plano, seguridad social (ARUS / Aportes en Línea), parámetros por NIT. |
+| `presentacion/` | Interfaz Tkinter: ventana principal, parámetros del plano, editor de administradoras, hilos y diálogos. |
+
+`app_gui.py` es el punto de entrada. Para agregar un banco: crear `extractores/<banco>.py` con `extraer()` y registrarlo en `servicios/fuentes.py`.
 
 ---
 
 ## 🚀 Requisitos e Instalación
 
 ### Requisitos previos
-* Python 3.8 o superior instalado en el sistema.
+* Python 3.10 o superior instalado en el sistema.
 
 ### Instalación de Dependencias
 1. Clona este repositorio o descarga los archivos.
@@ -63,7 +66,6 @@ La solución está desarrollada bajo una estructura modular en **Python 3**:
    ```bash
    pip install -r requirements.txt
    ```
-   *Nota: Adicionalmente, para el renderizado del visor del PDF, se requieren las librerías `PyMuPDF` (`fitz`) y `Pillow` (PIL), las cuales deben estar instaladas en el entorno.*
 
 ---
 
@@ -88,16 +90,10 @@ Una vez abierta la interfaz:
 
 Este proyecto adopta **Semantic Versioning (SemVer)** para gestionar las versiones del programa de forma ordenada y siguiendo las mejores prácticas de la industria.
 
-* **Versión Actual:** `v2.1.0`
+* **Versión Actual:** `v2.6.0`
 * **Historial de Cambios:** Todos los cambios detallados de cada versión se encuentran en el archivo [CHANGELOG.md](file:///c:/Users/USUARIO/Desktop/Proyectos/extractos_pdf/CHANGELOG.md).
 
-### 📦 Compilación a Ejecutable (.exe)
-El código de la versión actual está estructurado y optimizado para ser empaquetado en un archivo ejecutable `.exe` independiente (utilizando herramientas como `PyInstaller`). 
-
-> **Estado Actual:** El empaquetado y la distribución directa del binario `.exe` **no están disponibles todavía** para descarga en este repositorio (actualmente en desarrollo). 
-> 
-> Si deseas generar el archivo ejecutable de forma local, puedes preparar el entorno e iniciar la compilación con el siguiente comando:
-> ```bash
-> pip install pyinstaller
-> pyinstaller --noconfirm --onefile --windowed --name="LectorExtractorBancolombia" app_gui.py
-> ```
+### 📦 Compilación y publicación
+1. Subir la versión en `version.py`.
+2. `compilar.bat`: compila con Nuitka (standalone) y genera el instalador con Inno Setup en `instaladores\ExtractosPDF_Setup_<versión>.exe`.
+3. `publicar.bat`: copia el instalador al servidor con verificación SHA-256 y actualiza `version.json`.

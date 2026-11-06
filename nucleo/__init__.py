@@ -1,0 +1,1 @@
+"""Capa núcleo: constantes, configuración y utilidades puras sin dependencias de E/S."""

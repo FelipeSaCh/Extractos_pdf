@@ -1,13 +1,15 @@
-import json
 import os
-import re
-import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import pandas as pd
 
-RUTA_CONFIG = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), "ExtractorExcel", "config_plano.json")
+from nucleo.validaciones import (MSG_COMPROBANTE, MSG_CUENTA, MSG_TERCERO, PATRON_COMPROBANTE, PATRON_CUENTA,
+                                 PATRON_TERCERO)
+from presentacion.componentes import modal
+from presentacion.hilos import con_carga
+from servicios import config_plano
+
 NOMBRES_CLASE = {
     "EGRESO": "Egresos",
     "NOMINA": "Pagos de nómina",
@@ -15,64 +17,7 @@ NOMBRES_CLASE = {
     "BANCARIO": "Gastos/ingresos bancarios",
     "SEGURIDAD_SOCIAL": "Seguridad social",
 }
-PATRON_TIPO = re.compile(r"^[A-Z0-9]{1,5}$")
-PATRON_CODPUC = re.compile(r"^\d{4,12}$")
-PATRON_TERCERO = re.compile(r"^\d{5,15}(?:-\d)?$")
 FUENTE = ("Segoe UI", 10)
-
-
-def _modal(ventana, parent):
-    raiz = parent.winfo_toplevel()
-    ventana.transient(raiz)
-
-    def capturar():
-        try:
-            if ventana.winfo_exists() and ventana.winfo_viewable():
-                ventana.grab_set()
-        except tk.TclError:
-            pass
-
-    def al_minimizar(e):
-        if e.widget is raiz and ventana.winfo_exists():
-            ventana.grab_release()
-
-    def al_restaurar(e):
-        if e.widget is raiz and ventana.winfo_exists():
-            ventana.deiconify()
-            ventana.lift()
-            ventana.focus_force()
-            ventana.after(50, capturar)
-
-    ids = [(ev, raiz.bind(ev, fn, "+")) for ev, fn in (("<Unmap>", al_minimizar), ("<Map>", al_restaurar))]
-
-    def liberar(e):
-        if e.widget is ventana:
-            for ev, fid in ids:
-                try:
-                    raiz.unbind(ev, fid)
-                except tk.TclError:
-                    pass
-
-    ventana.bind("<Destroy>", liberar, "+")
-    ventana.update_idletasks()
-    capturar()
-
-
-def _cargar_config():
-    try:
-        with open(RUTA_CONFIG, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
-def _guardar_config(cfg):
-    try:
-        os.makedirs(os.path.dirname(RUTA_CONFIG), exist_ok=True)
-        with open(RUTA_CONFIG, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except OSError:
-        pass
 
 
 def _moneda(valor):
@@ -112,7 +57,7 @@ class DialogoPlano(tk.Toplevel):
         self.lin = lin
         self.predeterminados = dict(generador.COMPROBANTES_PREDETERMINADOS)
         self.tipo_clase = dict(self.predeterminados)
-        self.cfg = _cargar_config()
+        self.cfg = config_plano.cargar()
         self.resultado = None
         self.nit_aplicado = None
         self._pendiente = None
@@ -134,7 +79,7 @@ class DialogoPlano(tk.Toplevel):
 
         self._construir_ui()
         self._aplicar_nit()
-        _modal(self, parent)
+        modal(self, parent)
 
         for var in (self.var_nit, self.var_buscar):
             var.trace_add("write", lambda *_: self._programar())
@@ -243,7 +188,7 @@ class DialogoPlano(tk.Toplevel):
     @staticmethod
     def _normalizar(tipo):
         tipo = str(tipo or "").strip().upper()
-        return tipo if PATRON_TIPO.match(tipo) else None
+        return tipo if PATRON_COMPROBANTE.match(tipo) else None
 
     @staticmethod
     def _entero(valor):
@@ -324,7 +269,7 @@ class DialogoPlano(tk.Toplevel):
         tipo = self._normalizar(self.vars_clase[clase].get() if nuevo is None else nuevo)
         self.vars_clase[clase].set(tipo or viejo)
         if not tipo:
-            return self._avisar("Comprobante inválido", "El comprobante debe tener de 1 a 5 caracteres alfanuméricos (ej. EG1).")
+            return self._avisar("Comprobante inválido", MSG_COMPROBANTE)
         if tipo != viejo:
             self.tipo_clase[clase] = tipo
             mask = (self.lin["clase"] == clase) & (self.lin["tipo"] == viejo)
@@ -453,16 +398,16 @@ class DialogoPlano(tk.Toplevel):
         if campo == "tipo":
             tipo = self._normalizar(valor)
             if not tipo:
-                return self._avisar("Comprobante inválido", "El comprobante debe tener de 1 a 5 caracteres alfanuméricos (ej. EG1).")
+                return self._avisar("Comprobante inválido", MSG_COMPROBANTE)
             movs = self.lin.loc[filas, "mov"].unique()
             self.lin.loc[self.lin["mov"].isin(movs), "tipo"] = tipo
         elif campo == "codpuc":
-            if valor and not PATRON_CODPUC.match(valor):
-                return self._avisar("Cuenta inválida", "La cuenta contable debe tener de 4 a 12 dígitos.")
+            if valor and not PATRON_CUENTA.match(valor):
+                return self._avisar("Cuenta inválida", MSG_CUENTA)
             self.lin.loc[filas, "codpuc_manual"] = valor
         elif campo == "tercero":
             if valor and not PATRON_TERCERO.match(valor):
-                return self._avisar("Tercero inválido", "El tercero debe ser un NIT o cédula numérico (ej. 900123456 o 900123456-7).")
+                return self._avisar("Tercero inválido", MSG_TERCERO)
             self.lin.loc[filas, "tercero_manual"] = valor
         else:
             self.lin.loc[filas, "docrela"] = valor
@@ -512,68 +457,16 @@ class DialogoPlano(tk.Toplevel):
         self.destroy()
 
 
-def _guardar_parametros(resultado):
-    cfg = _cargar_config()
-    empresa = cfg.setdefault("empresas", {}).setdefault(resultado["nit"], {})
-    empresa.setdefault("clases", {}).update(resultado["clases"])
-    conteo = resultado["conteo"]
-    consecutivos = empresa.setdefault("consecutivos", {})
-    for tipo, inicio in resultado["consecutivos"].items():
-        consecutivos[tipo] = inicio + int(conteo.get(tipo, 0))
-    cfg["ultimo_nit"] = resultado["nit"]
-    _guardar_config(cfg)
-
-
-def _con_carga(parent, texto, funcion):
-    res = {}
-
-    def trabajo():
-        try:
-            res["ok"] = funcion()
-        except Exception as e:
-            res["error"] = e
-
-    ven = tk.Toplevel(parent)
-    ven.title("Archivo Plano")
-    ven.resizable(False, False)
-    ven.protocol("WM_DELETE_WINDOW", lambda: None)
-    ttk.Label(ven, text=texto, font=FUENTE, padding=(20, 15, 20, 8)).pack()
-    barra = ttk.Progressbar(ven, mode="indeterminate", length=300)
-    barra.pack(padx=20, pady=(0, 18))
-    barra.start(10)
-    ven.update_idletasks()
-    x = parent.winfo_rootx() + (parent.winfo_width() - ven.winfo_width()) // 2
-    y = parent.winfo_rooty() + (parent.winfo_height() - ven.winfo_height()) // 2
-    ven.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-    _modal(ven, parent)
-
-    hilo = threading.Thread(target=trabajo, daemon=True)
-    hilo.start()
-
-    def revisar():
-        if hilo.is_alive():
-            ven.after(100, revisar)
-        else:
-            barra.stop()
-            ven.destroy()
-
-    ven.after(100, revisar)
-    parent.wait_window(ven)
-    if "error" in res:
-        raise res["error"]
-    return res.get("ok")
-
-
 def generar_plano_con_dialogo(parent, excel_path, generador=None, confirmar=True, pedir_ruta=False):
     if confirmar and not messagebox.askyesno("Archivo Plano", "¿Desea ejecutar el archivo plano?", parent=parent):
         return None
 
     if generador is None:
-        from archivo_plano import GeneradorArchivoPlano
+        from servicios.plano import GeneradorArchivoPlano
         generador = GeneradorArchivoPlano(excel_path)
 
     try:
-        lin = _con_carga(parent, "Leyendo documento y preparando movimientos...", generador.preparar)
+        lin = con_carga(parent, "Leyendo documento y preparando movimientos...", generador.preparar)
     except Exception as e:
         messagebox.showerror("Error en Plano", f"No fue posible leer los movimientos:\n{e}", parent=parent)
         return None
@@ -607,7 +500,7 @@ def generar_plano_con_dialogo(parent, excel_path, generador=None, confirmar=True
         ruta_destino = os.path.normpath(ruta_destino)
 
     try:
-        ruta_plano = _con_carga(parent, "Generando archivo plano...", lambda: generador.generar(
+        ruta_plano = con_carga(parent, "Generando archivo plano...", lambda: generador.generar(
             lin=resultado["lin"],
             nit_empresa=resultado["nit"],
             primer_consecutivo=resultado["consecutivos"],
@@ -621,6 +514,6 @@ def generar_plano_con_dialogo(parent, excel_path, generador=None, confirmar=True
         messagebox.showerror("Error en Plano", f"No se encontró el archivo plano generado:\n{ruta_plano}", parent=parent)
         return None
 
-    _guardar_parametros(resultado)
+    config_plano.guardar_parametros(resultado)
     messagebox.showinfo("Archivo Plano", f"El archivo plano se ha generado en:\n{ruta_plano}", parent=parent)
     return ruta_plano

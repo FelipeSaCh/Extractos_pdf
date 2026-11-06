@@ -5,6 +5,27 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [2.6.0] - 2026-11-06
+### Modificado
+- Arquitectura por capas: `nucleo`, `infraestructura`, `extractores`, `servicios` y `presentacion`. `app_gui.py` queda como punto de entrada.
+- Registro único de fuentes (`servicios/fuentes.py`): reemplaza las importaciones con try/except y las cadenas if/elif de la interfaz; cada fuente reporta su propio error de carga.
+- Un solo convertidor de montos (`nucleo/numeros.a_float`) reemplaza siete funciones; un solo intérprete de fechas (`nucleo/fechas.partes_fecha`).
+- Lectura de PDF en una sola apertura por documento (`leer_paginas`), incluida la detección de la cuenta bancaria; progreso por página en todos los bancos.
+- El libro de Excel se escribe en una sola pasada desde memoria (antes: escribir, releer y reescribir).
+- «Cargar Excel» usa el mismo generador de libro que los PDF (resúmenes por mes, conciliación y columna `DCTO.`).
+- Persistencia de administradoras y de parámetros del plano separada de la interfaz.
+- La conversión a Excel 5.0/95 importa pywin32 sólo al generar el plano.
+
+### Corregido
+- Movimientos Persona Natural: montos con punto de miles sin decimales (`-$50.000`) se leían como -50.
+- Fechas «dd mmm aaaa» (Persona Natural) quedaban sin año/mes/día en el archivo plano.
+- El tipo de documento Bancolombia se toma del botón usado, no sólo del nombre del archivo.
+- `process_pdf` podía fallar con variable sin definir; mensaje de error de importación incorrecto entre bancos.
+- `minsize` mayor que la ventana inicial; `requirements.txt` sin numpy ni pywin32.
+
+### Eliminado
+- `clasificador_conceptos.py`, `movimientos_test.py` y `app_gui.spec` movidos a `_legacy/` (sin uso).
+
 ## [2.1.0] - 2026-08-19
 ### Añadido
 - Soporte para procesamiento de extractos de nequi. 

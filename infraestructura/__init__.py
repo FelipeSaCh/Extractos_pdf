@@ -1,0 +1,1 @@
+"""Capa de infraestructura: acceso a PDF, Excel, archivos compartidos, COM y red."""

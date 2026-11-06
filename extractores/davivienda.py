@@ -2,7 +2,10 @@ import re
 
 import pdfplumber
 
-from comun_extractos import DELIMITADOR, agrupar_filas, exportar
+from extractores import Extraccion
+from infraestructura.lectura_pdf import agrupar_filas, centro_x, leer_paginas
+from nucleo.constantes import DELIMITADOR
+from nucleo.numeros import a_float
 
 TIPO_COMUN = "COMUN"
 TIPO_DAMAS = "DAMAS"
@@ -11,6 +14,7 @@ TIPOS_CUENTA = {
     TIPO_DAMAS: "Cuenta de ahorros DAMAS (Débito / Crédito)",
 }
 COLUMNAS = ["FECHA", "COD TRANS", "DESCRIPCIÓN", "CIUDAD", "OFICINA/CANAL", "DOCUMENTO", "VALOR", "SALDO"]
+SIN_MOVIMIENTOS = "No se encontraron movimientos del extracto o el formato es irreconocible."
 
 FRASES_PIE_PAGINA = [
     "LA IMPORTANCIA DEL AHORRO",
@@ -50,45 +54,7 @@ def detectar_tipo_cuenta(pdf_path):
         return _tipo_desde_texto(pdf.pages[0].extract_text())
 
 
-def elegir_tipo_cuenta(parent, pdf_path=None):
-    import tkinter as tk
-    from tkinter import ttk
-
-    try:
-        sugerido = detectar_tipo_cuenta(pdf_path) if pdf_path else None
-    except Exception:
-        sugerido = None
-    var = tk.StringVar(value=sugerido or TIPO_COMUN)
-    res = {}
-
-    ven = tk.Toplevel(parent)
-    ven.title("Tipo de cuenta Davivienda")
-    ven.transient(parent)
-    ven.resizable(False, False)
-    frm = ttk.Frame(ven, padding=16)
-    frm.pack(fill=tk.BOTH, expand=True)
-    ttk.Label(frm, text="Seleccione el tipo de extracto:", font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 8))
-    for clave, texto in TIPOS_CUENTA.items():
-        etiqueta = f"{texto}  (detectado)" if clave == sugerido else texto
-        ttk.Radiobutton(frm, text=etiqueta, variable=var, value=clave).pack(anchor="w", pady=2)
-
-    def aceptar(_=None):
-        res["tipo"] = var.get()
-        ven.destroy()
-
-    botones = ttk.Frame(frm)
-    botones.pack(fill=tk.X, pady=(12, 0))
-    ttk.Button(botones, text="Cancelar", command=ven.destroy).pack(side=tk.RIGHT)
-    ttk.Button(botones, text="Aceptar", command=aceptar).pack(side=tk.RIGHT, padx=6)
-    ven.bind("<Return>", aceptar)
-    ven.bind("<Escape>", lambda e: ven.destroy())
-    ven.grab_set()
-    parent.wait_window(ven)
-    return res.get("tipo")
-
-
-def _a_float(txt):
-    return float(txt.replace("$", "").replace(",", ""))
+OPCIONES = {"tipo_cuenta": ("Tipo de cuenta Davivienda", "Seleccione el tipo de extracto:", TIPOS_CUENTA, detectar_tipo_cuenta)}
 
 
 def _fecha(dia, mes, year):
@@ -118,7 +84,7 @@ def _parsear_fila_damas(palabras):
 
     montos = []
     while textos and len(montos) < 2 and _PATRON_MONTO.match(textos[-1]):
-        montos.insert(0, _a_float(textos.pop()))
+        montos.insert(0, a_float(textos.pop()))
         tokens.pop()
     if len(montos) < 2:
         return None
@@ -192,44 +158,15 @@ def _filas_comun(filas, anc, year, salida):
                 _guardar_tx(tx, salida)
             tx = {"FECHA": _fecha(dia, mes, year), "VALOR": [], "DOCUMENTO": [], "DESCRIPCIÓN": [], "OFICINA": []}
             for w in palabras[2:]:
-                x = (w["x0"] + w["x1"]) / 2.0
+                x = centro_x(w)
                 clave = ("VALOR" if x < anc * 0.28 else "DOCUMENTO" if x < anc * 0.35
                          else "DESCRIPCIÓN" if x < anc * 0.72 else "OFICINA")
                 tx[clave].append(w["text"])
         elif tx and palabras[0]["x0"] >= anc * 0.35:
             for w in palabras:
-                x = (w["x0"] + w["x1"]) / 2.0
-                tx["DESCRIPCIÓN" if x < anc * 0.72 else "OFICINA"].append(w["text"])
+                tx["DESCRIPCIÓN" if centro_x(w) < anc * 0.72 else "OFICINA"].append(w["text"])
     if tx:
         _guardar_tx(tx, salida)
-
-
-def extraer_lineas_davivienda(pdf_path, progreso_callback=None, tipo_cuenta=None):
-    lineas = []
-    with pdfplumber.open(pdf_path) as pdf:
-        total = len(pdf.pages)
-        primera = pdf.pages[0]
-        texto_pag1 = primera.extract_text()
-        match_ano = _PATRON_ANO.search(texto_pag1 or "")
-        year = match_ano.group(1) if match_ano else None
-
-        detectado = _tipo_desde_texto(texto_pag1)
-        if tipo_cuenta and detectado and tipo_cuenta != detectado:
-            raise ValueError(
-                f"El extracto corresponde a '{TIPOS_CUENTA[detectado]}', "
-                f"pero se seleccionó '{TIPOS_CUENTA[tipo_cuenta]}'."
-            )
-        procesar = _filas_damas if (tipo_cuenta or detectado or TIPO_COMUN) == TIPO_DAMAS else _filas_comun
-        saldo_anterior, nuevo_saldo = _saldos(primera.extract_words())
-
-        for n_pag, page in enumerate(pdf.pages, start=1):
-            words = page.extract_words()
-            if words:
-                procesar(agrupar_filas(words, 2.0), page.width, year, lineas)
-            if progreso_callback:
-                progreso_callback(n_pag, total)
-
-    return lineas, saldo_anterior, nuevo_saldo
 
 
 def _guardar_tx(tx, salida):
@@ -248,8 +185,29 @@ def _guardar_tx(tx, salida):
     salida.append(DELIMITADOR.join([tx["FECHA"], "", desc, "", oficina, doc, valor, ""]))
 
 
-def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_callback=None, tipo_cuenta=None):
-    lineas, saldo_ant, saldo_nue = extraer_lineas_davivienda(pdf_path, progreso_callback, tipo_cuenta)
-    if not lineas:
-        raise ValueError("No se encontraron movimientos del extracto o el formato es irreconocible.")
-    return exportar(lineas, COLUMNAS, pdf_path, output_excel_path, saldo_ant, saldo_nue)
+def extraer(pdf_path, progreso=None, tipo_cuenta=None, **_):
+    estado = {"saldos": (None, None)}
+
+    def pagina(page):
+        words = page.extract_words()
+        if page.page_number == 1:
+            texto = page.extract_text()
+            match_ano = _PATRON_ANO.search(texto or "")
+            detectado = _tipo_desde_texto(texto)
+            if tipo_cuenta and detectado and tipo_cuenta != detectado:
+                raise ValueError(
+                    f"El extracto corresponde a '{TIPOS_CUENTA[detectado]}', "
+                    f"pero se seleccionó '{TIPOS_CUENTA[tipo_cuenta]}'."
+                )
+            estado.update(
+                year=match_ano.group(1) if match_ano else None,
+                procesar=_filas_damas if (tipo_cuenta or detectado or TIPO_COMUN) == TIPO_DAMAS else _filas_comun,
+                saldos=_saldos(words),
+            )
+        salida = []
+        if words:
+            estado["procesar"](agrupar_filas(words, 2.0), page.width, estado["year"], salida)
+        return salida
+
+    lineas, cuenta = leer_paginas(pdf_path, pagina, progreso)
+    return Extraccion(COLUMNAS, lineas, cuenta, *estado["saldos"])

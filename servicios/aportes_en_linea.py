@@ -1,16 +1,15 @@
+"""Planilla Resumen de Aportes en Línea (PDF o Excel) → comprobante PS1."""
 import datetime
 import re
 
 import numpy as np
 import pandas as pd
-import pdfplumber
 
-from script_seguridad_social import (
-    GeneradorSeguridadSocial,
-    RUTA_ADMINISTRADORAS,
-    _cargar_administradoras,
-    _normalizar,
-)
+from infraestructura.lectura_pdf import texto_y_tablas
+from nucleo.config import RUTA_ADMINISTRADORAS
+from nucleo.numeros import a_float
+from nucleo.texto import clave as _clave, codigo as _codigo, normalizar
+from servicios.seguridad_social import TOLERANCIA, GeneradorSeguridadSocial
 
 PATRON_LIQ = re.compile(
     r"(?P<ap>\d{4})[-/](?P<mp>\d{1,2})(?:[-/]\d{1,2})?\s+\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?\s+\d+\s+(?P<planilla>\d+)\s+\S+\s+"
@@ -49,6 +48,7 @@ ADMINISTRADORAS_PILA = {
     "SENA": ("899999034", "SENA"),
     "ICBF": ("899999239", "ICBF"),
 }
+PROPORCION_SENA = 2 / 5
 
 
 def _celda(v):
@@ -61,23 +61,6 @@ def _celda(v):
     return str(v).strip()
 
 
-def _clave(texto):
-    return _normalizar(texto).replace(" ", "")
-
-
-def _codigo(texto):
-    return re.sub(r"\s", "", str(texto or "")).upper()
-
-
-def _valor(texto):
-    txt = re.sub(r"[^\d.,]", "", str(texto or ""))
-    txt = re.sub(r"[.,](?=\d{3}(?!\d))", "", txt).replace(",", ".")
-    try:
-        return float(txt)
-    except ValueError:
-        return 0.0
-
-
 class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
     NIT_OPERADOR = "900147238"
     NOMBRE_OPERADOR = "APORTES EN LINEA"
@@ -85,6 +68,7 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
     GRUPOS = ("PENSION", "SALUD", "CCF", "RIESGOS", "PARAFISCALES")
     EXTENSIONES_EXCEL = (".xls", ".xlsx", ".xlsm")
     MARCAS_HOJA = ("PLANILLA RESUMEN", "LIQUIDACION DETALLADA")
+    MSG_SIN_CUENTA = "Sin tercero o cuenta contable en administradoras.json"
 
     def __init__(self, ruta_origen, ruta_administradoras=RUTA_ADMINISTRADORAS):
         super().__init__(ruta_origen, ruta_administradoras)
@@ -94,24 +78,15 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
         libros = [[[_celda(v) for v in f] for f in df.itertuples(index=False)] for df in hojas.values()]
         textos = ["\n".join(" ".join(c.replace("\n", " ") for c in f if c) for f in l) for l in libros]
         for marca in self.MARCAS_HOJA:
-            idx = next((i for i, l in enumerate(libros) if any(marca in _normalizar(c) for f in l for c in f)), None)
+            idx = next((i for i, l in enumerate(libros) if any(marca in normalizar(c) for f in l for c in f)), None)
             if idx is not None:
                 return "\n".join([textos[idx]] + [t for i, t in enumerate(textos) if i != idx]), [libros[idx]]
         raise ValueError("No se encontró la hoja 'Planilla Resumen' en el Excel.")
 
-    def _leer_pdf_tablas(self):
-        textos, bloques = [], []
-        with pdfplumber.open(self.ruta_origen) as pdf:
-            for pagina in pdf.pages:
-                p = pagina.filter(lambda o: o.get("object_type") != "char" or o.get("upright", True))
-                textos.append(p.extract_text() or "")
-                bloques += [[[str(c or "").strip() for c in f] for f in t] for t in p.extract_tables()]
-        return "\n".join(textos), bloques
-
     def _leer_origen(self):
         if self.ruta_origen.lower().endswith(self.EXTENSIONES_EXCEL):
             return self._leer_excel()
-        return self._leer_pdf_tablas()
+        return texto_y_tablas(self.ruta_origen)
 
     def _layout(self, filas):
         for i, fila in enumerate(filas):
@@ -155,7 +130,7 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
                 if not self._en(fila, campos["NO"]).strip().isdigit():
                     continue
                 for g in self.GRUPOS:
-                    valor = _valor(self._en(fila, campos[(g, "APORTE")]))
+                    valor = abs(a_float(self._en(fila, campos[(g, "APORTE")])))
                     if valor:
                         cod = _codigo(self._en(fila, campos[(g, "COD")])) if (g, "COD") in campos else ""
                         aportes[(g, cod)] = aportes.get((g, cod), 0.0) + valor
@@ -175,7 +150,7 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
             clave = (_codigo(m["cod"]), nit)
             previo = filas.get(clave, {"nombre": m["adm"].strip(), "val": 0.0, "mora": 0.0, "saldo": 0.0, "pagar": 0.0})
             for k in ("val", "mora", "saldo", "pagar"):
-                previo[k] += _valor(m[k])
+                previo[k] += abs(a_float(m[k]))
             filas[clave] = previo
         return filas
 
@@ -186,16 +161,16 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
         filas = []
         for (grupo, cod), valor in sorted(aportes.items()):
             if grupo == "PARAFISCALES":
-                sena = round(valor * 2 / 5, -2)
+                sena = round(valor * PROPORCION_SENA, -2)
                 partes = [("SENA", sena), ("ICBF", valor - sena)]
             else:
                 partes = [(cod, valor)]
-            for codigo, monto in partes:
-                nit, nombre = self._administradora(codigo)
-                cuenta = self._buscar_cuenta(codigo, nit, nombre)
+            for cod_adm, monto in partes:
+                nit, nombre = self._administradora(cod_adm)
+                cuenta = self._buscar_cuenta(cod_adm, nit, nombre)
                 if not cuenta:
-                    sin_cuenta.append(f"{grupo} {codigo} {nombre}".strip())
-                filas.append(self._fila(cuenta, nit, nombre or codigo, debito=monto))
+                    sin_cuenta.append(f"{grupo} {cod_adm} {nombre}".strip())
+                filas.append(self._fila(cuenta, nit, nombre or cod_adm, debito=monto))
         return filas
 
     def _filas_resumen(self, resumen, sin_cuenta):
@@ -216,37 +191,35 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
         texto, bloques = self._leer_origen()
         liq = PATRON_LIQ.search(texto)
         if not liq:
-            raise ValueError("No se encontraron los datos generales de la liquidación. Verifique que sea una Planilla Resumen de Aportes en Línea.")
+            raise ValueError("No se encontraron los datos generales de la liquidación. "
+                             "Verifique que sea una Planilla Resumen de Aportes en Línea.")
 
         nit_emp = PATRON_NIT.search(texto)
         self.nit_empresa = nit_emp.group(1) if nit_emp else ""
-        self._adm = _cargar_administradoras(self.ruta_administradoras)
+        self._cargar_administradoras()
 
         sin_cuenta = []
         resumen = self._resumen(texto)
         filas = self._filas_resumen(resumen, sin_cuenta) if resumen else self._filas_detalle(bloques, sin_cuenta)
 
-        total = round(sum(f["debito"] for f in filas if pd.notna(f["debito"]))
-                      - sum(f["credito"] for f in filas if pd.notna(f["credito"])), 2)
-        pagado = _valor(liq["valor"])
+        total = round(self._suma(filas, "debito") - self._suma(filas, "credito"), 2)
+        pagado = a_float(liq["valor"])
         diferencia = round(pagado - total, 2)
-        if resumen and abs(diferencia) > 1:
+        if resumen and abs(diferencia) > TOLERANCIA:
             raise ValueError(f"El resumen de pago ({total:,.0f}) no coincide con el valor pagado ({pagado:,.0f}).")
-        if diferencia < -1:
+        if diferencia < -TOLERANCIA:
             raise ValueError(f"La suma de aportes ({total:,.0f}) supera el valor pagado ({pagado:,.0f}).")
-        if diferencia > 1:
+        if diferencia > TOLERANCIA:
             filas.append(self._fila(self.CODPUC_INTERESES_MORA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, debito=diferencia))
 
-        self.advertencias = (
-            ["Sin tercero o cuenta contable en administradoras.json:\n- " + "\n- ".join(sin_cuenta)] if sin_cuenta else []
-        )
+        self._advertir_sin_cuenta(sin_cuenta)
         if any(pd.notna(f["credito"]) and not f["codpuc_auto"] for f in filas):
-            self.advertencias.append("La planilla descuenta saldos/incapacidades: asigne la cuenta por cobrar en las líneas crédito sin cuenta.")
+            self.advertencias.append("La planilla descuenta saldos/incapacidades: "
+                                     "asigne la cuenta por cobrar en las líneas crédito sin cuenta.")
 
         detalle = f"PAGO SEGURIDAD SOCIAL {self.MESES[int(liq['mp']) - 1]} PLANILLA {liq['planilla']}"
-        filas.append(self._fila(self.CODPUC_CONTRAPARTIDA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, credito=pagado))
-        return pd.DataFrame(filas).assign(
-            mov=0, clase=self.CLASE_SS, tipo=self.COMPROBANTES_PREDETERMINADOS[self.CLASE_SS],
-            ano=int(liq["ano"]), mes=int(liq["mes"]), dia=int(liq["dia"]), detalle=detalle,
-            codpuc_manual="", tercero_manual="", docrela="",
-        )
+        filas.append(self._contrapartida(pagado))
+        return self._comprobante(filas, int(liq["ano"]), int(liq["mes"]), int(liq["dia"]), detalle)
+
+
+Generador = GeneradorAportesEnLinea

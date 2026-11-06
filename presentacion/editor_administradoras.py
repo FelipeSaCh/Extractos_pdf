@@ -1,20 +1,19 @@
-#editor_administradoras.py
-import json
-import os
 import re
-import shutil
-import tempfile
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from dialogo_plano import _modal
-from script_seguridad_social import RUTA_ADMINISTRADORAS, _normalizar
+from infraestructura import administradoras
+from nucleo.config import RUTA_ADMINISTRADORAS
+from nucleo.texto import normalizar as _normalizar
+from nucleo.validaciones import (MSG_CODIGO_PILA, MSG_CUENTA, MSG_NIT, PATRON_CODIGO_PILA, PATRON_CUENTA,
+                                 PATRON_NIT)
+from presentacion.componentes import modal
 
 FUENTE = ("Segoe UI", 10)
 VALIDACIONES = {
-    "NIT": (re.compile(r"^\d{5,15}$"), "El NIT debe tener de 5 a 15 dígitos, sin dígito de verificación."),
-    "CUENTA": (re.compile(r"^\d{4,12}$"), "La cuenta contable debe tener de 4 a 12 dígitos."),
-    "CODIGO": (re.compile(r"^[A-Z0-9-]{2,10}$"), "El código PILA admite letras, números y guion (ej. EPS010, 25-14)."),
+    "NIT": (PATRON_NIT, MSG_NIT),
+    "CUENTA": (PATRON_CUENTA, MSG_CUENTA),
+    "CODIGO": (PATRON_CODIGO_PILA, MSG_CODIGO_PILA),
 }
 OBLIGATORIAS = ("NOMBRE", "NIT")
 TIPOS = ("NOMBRE", "NIT", "CUENTA", "CODIGO", "CATEGOR")
@@ -34,26 +33,10 @@ def _limpiar(tipo, valor):
     return valor
 
 
-def _leer(ruta):
-    with open(ruta, encoding="utf-8-sig") as f:
-        raw = json.load(f)
-    clave = None
-    if isinstance(raw, dict):
-        clave = next((k for k, v in raw.items() if isinstance(v, list) and (not v or isinstance(v[0], dict))), None)
-        if clave is None:
-            raise ValueError("administradoras.json no contiene una lista de administradoras.")
-        registros = raw[clave]
-    elif isinstance(raw, list):
-        registros = raw
-    else:
-        raise ValueError("Formato de administradoras.json no reconocido.")
-    return raw, clave, [dict(r) for r in registros if isinstance(r, dict)], os.path.getmtime(ruta)
-
-
 class EditorAdministradoras(tk.Toplevel):
     def __init__(self, parent, ruta=RUTA_ADMINISTRADORAS):
         self.ruta = ruta
-        datos = _leer(ruta)
+        datos = administradoras.leer(ruta)
         super().__init__(parent)
         self.title("Administradoras de seguridad social")
         self.geometry("1050x600")
@@ -262,13 +245,13 @@ class EditorAdministradoras(tk.Toplevel):
         ttk.Button(botones, text="Aceptar", command=aceptar).pack(side=tk.RIGHT, padx=6)
         ven.bind("<Return>", aceptar)
         ven.bind("<Escape>", lambda e: ven.destroy())
-        _modal(ven, self)
+        modal(ven, self)
 
     def _recargar(self):
         if self.cambios and not messagebox.askyesno("Recargar", "Se perderán los cambios sin guardar. ¿Continuar?", parent=self):
             return
         try:
-            self._aplicar(*_leer(self.ruta))
+            self._aplicar(*administradoras.leer(self.ruta))
         except Exception as e:
             messagebox.showerror("Administradoras", f"No se pudo leer el archivo:\n{e}", parent=self)
 
@@ -277,30 +260,14 @@ class EditorAdministradoras(tk.Toplevel):
             messagebox.showinfo("Administradoras", "No hay cambios por guardar.", parent=self)
             return False
         try:
-            if os.path.getmtime(self.ruta) != self.mtime and not messagebox.askyesno(
+            if administradoras.modificado_desde(self.ruta, self.mtime) and not messagebox.askyesno(
                 "Archivo modificado",
                 "Otro usuario modificó administradoras.json después de que usted lo abrió.\n\n"
                 "Sí: sobrescribir con sus cambios.\nNo: cancelar (use Recargar para ver la versión actual).",
                 icon="warning", parent=self,
             ):
                 return False
-
-            contenido = self.registros
-            if self.clave is not None:
-                self.raw[self.clave] = self.registros
-                contenido = self.raw
-            carpeta = os.path.dirname(self.ruta)
-            shutil.copy2(self.ruta, self.ruta + ".bak")
-            fd, temporal = tempfile.mkstemp(suffix=".tmp", dir=carpeta)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(contenido, f, ensure_ascii=False, indent=2)
-                os.replace(temporal, self.ruta)
-            except Exception:
-                if os.path.exists(temporal):
-                    os.remove(temporal)
-                raise
-            self.mtime = os.path.getmtime(self.ruta)
+            self.mtime = administradoras.guardar(self.ruta, self.raw, self.clave, self.registros)
         except Exception as e:
             messagebox.showerror("Administradoras", f"No se pudo guardar:\n{e}", parent=self)
             return False

@@ -8,8 +8,8 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent
 sys.path.insert(0, str(RAIZ))
-import actualizador as act  # noqa: E402
-from actualizador import __version__  # noqa: E402
+import infraestructura.actualizador as act  # noqa: E402
+from version import __version__  # noqa: E402
 
 
 def _salir(msg: str) -> None:

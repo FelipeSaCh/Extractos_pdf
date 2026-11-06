@@ -1,15 +1,16 @@
-import json
+"""Planillas PILA de ARUS (Enlace Operativo) → comprobante PS1."""
 import os
 import re
-import unicodedata
 
 import numpy as np
 import pandas as pd
-import pdfplumber
 
-from archivo_plano import GeneradorArchivoPlano
-
-RUTA_ADMINISTRADORAS = r"\\SRV-CONTAB\Servidor de Archivos\2025 SERVIDOR\APLICATIVO FELIPE\Documentos_auditor\administradoras.json"
+from infraestructura import administradoras
+from infraestructura.lectura_pdf import texto_pdf
+from nucleo.config import RUTA_ADMINISTRADORAS
+from nucleo.numeros import a_float
+from nucleo.texto import codigo, normalizar
+from servicios.plano import GeneradorArchivoPlano
 
 PATRON_FILA = re.compile(
     r"^(?:N(?P<nit>\d{6,15})\s+)?(?P<cod>\S+)(?:\s+(?P<adm>.*?))?\s+(?P<afi>\d+)"
@@ -23,50 +24,7 @@ PATRON_PERIODO = re.compile(
     r"Per[ií]odo\s+de\s+Cotizaci[oó]n\s+(?P<tipo>Otros\s+Riesgos|Para\s+Salud)\s*:?\s*(?P<mes>[A-Za-zÁÉÍÓÚáéíóúÑñ]+)",
     re.I,
 )
-
-
-def _monto(txt):
-    txt = str(txt or "").strip()
-    txt = txt.replace(".", "").replace(",", ".") if "," in txt else txt.replace(".", "")
-    return float(txt or 0)
-
-
-def _normalizar(texto):
-    texto = unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode().upper()
-    return re.sub(r"[^A-Z0-9]+", " ", texto).strip()
-
-
-def _digitos(valor):
-    if isinstance(valor, float):
-        valor = "" if np.isnan(valor) else int(valor)
-    return re.sub(r"\D", "", str(valor if valor is not None else ""))
-
-
-def _cargar_administradoras(ruta):
-    with open(ruta, encoding="utf-8-sig") as f:
-        data = json.load(f)
-    if isinstance(data, dict):
-        listas = [v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)]
-        if listas:
-            data = listas[0]
-    df = pd.DataFrame(data)
-    cols = {_normalizar(c): c for c in df.columns}
-
-    def col(clave, obligatoria=True):
-        c = next((o for n, o in cols.items() if clave in n), None)
-        if c is None:
-            if obligatoria:
-                raise ValueError(f"administradoras.json no contiene la columna '{clave}'.")
-            return pd.Series("", index=df.index)
-        return df[c]
-
-    return pd.DataFrame({
-        "nombre": col("NOMBRE").map(_normalizar),
-        "nit": col("NIT").map(_digitos),
-        "categoria": col("CATEGOR", False).map(_normalizar),
-        "cuenta": col("CUENTA").map(_digitos),
-        "codigo": col("CODIGO", False).map(lambda v: "" if pd.isna(v) else re.sub(r"\s", "", str(v)).upper()),
-    })
+TOLERANCIA = 1
 
 
 class GeneradorSeguridadSocial(GeneradorArchivoPlano):
@@ -78,6 +36,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
     NOMBRE_OPERADOR = "ENLACE OPERATIVO"
     CODPUC_INTERESES_MORA = "530520001"
     CODPUC_CONTRAPARTIDA = "112005001"
+    MSG_SIN_CUENTA = "Sin cuenta contable en administradoras.json"
 
     def __init__(self, ruta_pdf, ruta_administradoras=RUTA_ADMINISTRADORAS):
         super().__init__(ruta_pdf)
@@ -86,13 +45,12 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         self.advertencias = []
         self._adm = None
 
-    def _leer_pdf(self):
-        with pdfplumber.open(self.ruta_origen) as pdf:
-            return "\n".join(p.extract_text() or "" for p in pdf.pages)
+    def _cargar_administradoras(self):
+        self._adm = administradoras.tabla(self.ruta_administradoras)
 
     def _buscar_cuenta(self, cod, nit, nombre):
         adm = self._adm[self._adm["cuenta"] != ""]
-        cod = re.sub(r"\s", "", str(cod or "")).upper()
+        cod = codigo(cod)
         if cod:
             cuentas = adm.loc[adm["codigo"] == cod, "cuenta"].unique()
             if len(cuentas) == 1:
@@ -102,7 +60,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
             cand = cand[~cand["categoria"].str.contains("CESANT", na=False)]
         if cand["cuenta"].nunique() == 1:
             return cand["cuenta"].iloc[0]
-        nom = _normalizar(nombre)
+        nom = normalizar(nombre)
         if not nom:
             return ""
         base = cand if not cand.empty else adm
@@ -116,31 +74,44 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         return ""
 
     def _mes_periodo(self, texto, mes_fecha):
-        periodos = {_normalizar(m["tipo"]): _normalizar(m["mes"]) for m in PATRON_PERIODO.finditer(texto)}
+        periodos = {normalizar(m["tipo"]): normalizar(m["mes"]) for m in PATRON_PERIODO.finditer(texto)}
         nombre = periodos.get("OTROS RIESGOS") or periodos.get("PARA SALUD") or ""
         return next((m for m in self.MESES if nombre and m[:3] == nombre[:3]), self.MESES[mes_fecha - 1])
 
     @staticmethod
     def _fila(cuenta, tercero, nombre, debito=np.nan, credito=np.nan):
-        return {"codpuc_auto": cuenta, "tercero_ref": tercero, "nombre": nombre,
-                "debito": debito, "credito": credito}
+        return {"codpuc_auto": cuenta, "tercero_ref": tercero, "nombre": nombre, "debito": debito, "credito": credito}
 
-    def _con_contrapartida_total(self, filas):
-        total = round(sum(f["debito"] for f in filas if pd.notna(f["debito"])), 2)
-        return filas + [self._fila(self.CODPUC_CONTRAPARTIDA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, credito=total)]
+    @staticmethod
+    def _suma(filas, campo):
+        return sum(f[campo] for f in filas if pd.notna(f[campo]))
+
+    def _contrapartida(self, valor):
+        return self._fila(self.CODPUC_CONTRAPARTIDA, self.NIT_OPERADOR, self.NOMBRE_OPERADOR, credito=valor)
+
+    def _advertir_sin_cuenta(self, sin_cuenta):
+        self.advertencias = [f"{self.MSG_SIN_CUENTA}:\n- " + "\n- ".join(sin_cuenta)] if sin_cuenta else []
+
+    def _comprobante(self, filas, ano, mes, dia, detalle):
+        return pd.DataFrame(filas).assign(
+            mov=0, clase=self.CLASE_SS, tipo=self.COMPROBANTES_PREDETERMINADOS[self.CLASE_SS],
+            ano=ano, mes=mes, dia=dia, detalle=detalle,
+            codpuc_manual="", tercero_manual="", docrela="",
+        )
 
     def preparar(self):
-        texto = self._leer_pdf()
+        texto = texto_pdf(self.ruta_origen)
         fecha = PATRON_FECHA.search(texto)
         planilla = PATRON_PLANILLA.search(texto)
         if not fecha or not planilla:
-            raise ValueError("No se encontró la Fecha o el Número de Planilla. Verifique que sea una planilla de Arus (Enlace Operativo).")
+            raise ValueError("No se encontró la Fecha o el Número de Planilla. "
+                             "Verifique que sea una planilla de Arus (Enlace Operativo).")
 
         ano, mes, dia = map(int, fecha.groups())
         nit_emp = PATRON_NIT_EMPRESA.search(texto)
         self.nit_empresa = nit_emp.group(1) if nit_emp else ""
         detalle = f"PAGO SEGURIDAD SOCIAL {self._mes_periodo(texto, mes)} PLANILLA {planilla.group(1)}"
-        self._adm = _cargar_administradoras(self.ruta_administradoras)
+        self._cargar_administradoras()
 
         filas, sin_cuenta, total = [], [], 0.0
         for linea in texto.splitlines():
@@ -149,7 +120,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
                 continue
             nit = m["nit"] or ""
             adm = (m["adm"] or "").strip()
-            valor, mora = _monto(m["val"]), _monto(m["mora"])
+            valor, mora = a_float(m["val"]), a_float(m["mora"])
             tercero = nit or self.NIT_ARUS
             nombre = adm or self.NIT_ARUS
             cuenta = self._buscar_cuenta(m["cod"], nit, adm)
@@ -165,21 +136,15 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
             raise ValueError("No se encontraron administradoras en la planilla.")
 
         total_pdf = PATRON_TOTAL.search(texto)
-        if total_pdf and abs(_monto(total_pdf.group(1)) - total) > 1:
+        if total_pdf and abs(a_float(total_pdf.group(1)) - total) > TOLERANCIA:
             raise ValueError(
                 f"La suma de administradoras ({total:,.0f}) no coincide con el Total a Pagar "
-                f"({_monto(total_pdf.group(1)):,.0f})."
+                f"({a_float(total_pdf.group(1)):,.0f})."
             )
 
-        self.advertencias = (
-            [f"Sin cuenta contable en administradoras.json:\n- " + "\n- ".join(sin_cuenta)] if sin_cuenta else []
-        )
-
-        return pd.DataFrame(self._con_contrapartida_total(filas)).assign(
-            mov=0, clase=self.CLASE_SS, tipo=self.COMPROBANTES_PREDETERMINADOS[self.CLASE_SS],
-            ano=ano, mes=mes, dia=dia, detalle=detalle,
-            codpuc_manual="", tercero_manual="", docrela="",
-        )
+        self._advertir_sin_cuenta(sin_cuenta)
+        filas.append(self._contrapartida(round(self._suma(filas, "debito"), 2)))
+        return self._comprobante(filas, ano, mes, dia, detalle)
 
     def calcular(self, lin, nit_empresa="", primer_consecutivo=1):
         df = lin.copy()
@@ -188,13 +153,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
         df["tipo"] = df["tipo"].fillna("").astype(str).str.strip().str.upper()
         df["codpuc"] = df["codpuc_manual"].where(df["codpuc_manual"] != "", df["codpuc_auto"])
         df["tercero"] = df["tercero_manual"].where(df["tercero_manual"] != "", df["tercero_ref"])
-        movs = df.drop_duplicates("mov")[["mov", "tipo"]]
-        if isinstance(primer_consecutivo, dict):
-            inicio = movs["tipo"].map(lambda t: self._a_entero(primer_consecutivo.get(t, 1)))
-        else:
-            inicio = self._a_entero(primer_consecutivo)
-        numeros = inicio + movs.groupby("tipo").cumcount()
-        df["numero"] = df["mov"].map(dict(zip(movs["mov"], numeros))).map(lambda n: f"{int(n):010d}")
+        df["numero"] = self._numerar(df["mov"], df["tipo"], primer_consecutivo)
         return df
 
 
@@ -227,3 +186,11 @@ class GeneradorPlanillasMultiples(GeneradorSeguridadSocial):
 
         self.nit_empresa = next(iter(nits), "")
         return pd.concat(partes, ignore_index=True)
+
+
+Generador = GeneradorSeguridadSocial
+
+
+def generador_para(clase, rutas):
+    generadores = [clase(r) for r in rutas]
+    return generadores[0] if len(generadores) == 1 else GeneradorPlanillasMultiples(generadores)

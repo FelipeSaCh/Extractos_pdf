@@ -1,0 +1,1 @@
+"""Capa de servicios: reglas contables y casos de uso (sin interfaz gráfica)."""

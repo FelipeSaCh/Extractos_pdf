@@ -1,12 +1,13 @@
 import re
 
-import pdfplumber
-
-from comun_extractos import DELIMITADOR, es_numero_financiero, exportar
+from extractores import Extraccion
+from infraestructura.lectura_pdf import centro_x, es_numero_financiero, leer_paginas
+from nucleo.constantes import DELIMITADOR
 
 COLUMNAS = ["FECHA", "COD TRANS", "DESCRIPCIÓN", "CIUDAD", "OFICINA/CANAL", "DOCUMENTO", "VALOR", "SALDO"]
 PATRON_FECHA = re.compile(r"^\b\d{1,2}/\d{2}\b")
 MARCAS_FIN = ("FIN MOVIMIENTOS", "NOTIFICAR", "REVISORÍA")
+SIN_MOVIMIENTOS = "No se pudieron extraer movimientos del PDF."
 
 
 def _movimientos_pagina(page):
@@ -19,8 +20,8 @@ def _movimientos_pagina(page):
                (anc * 0.67, "OFICINA"), (anc * 0.74, "DOCUMENTO")]
     x_fecha, x_valor = anc * 0.11, anc * 0.88
 
-    y_max = next((w["top"] - 2 for w in sorted(words, key=lambda w: w["top"])
-                  if any(m in w["text"].upper() for m in MARCAS_FIN)), alt)
+    y_max = next((l["top"] - 2 for l in page.extract_text_lines()
+                  if any(m in l["text"].upper() for m in MARCAS_FIN)), alt)
     anclas = [w for w in sorted(words, key=lambda w: (w["top"], w["x0"]))
               if w["top"] < y_max and w["x0"] < x_fecha and PATRON_FECHA.match(w["text"].strip())]
 
@@ -36,7 +37,7 @@ def _movimientos_pagina(page):
             txt = w["text"].strip()
             if not txt or set(txt) == {"-"} or w == ancla:
                 continue
-            x = (w["x0"] + w["x1"]) / 2.0
+            x = centro_x(w)
             col = next((c for lim, c in limites if x < lim), None)
             if col:
                 tx[col].append(txt)
@@ -54,19 +55,5 @@ def _movimientos_pagina(page):
     return lineas
 
 
-def extraer_lineas_extractos_pyme(pdf_path, progreso_callback=None):
-    lineas = []
-    with pdfplumber.open(pdf_path) as pdf:
-        total = len(pdf.pages)
-        for n_pag, page in enumerate(pdf.pages, start=1):
-            lineas += _movimientos_pagina(page)
-            if progreso_callback:
-                progreso_callback(n_pag, total)
-    return lineas
-
-
-def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_callback=None):
-    lineas = extraer_lineas_extractos_pyme(pdf_path, progreso_callback)
-    if not lineas:
-        raise ValueError("No se pudieron extraer movimientos del PDF.")
-    return exportar(lineas, COLUMNAS, pdf_path, output_excel_path)
+def extraer(pdf_path, progreso=None, **_):
+    return Extraccion(COLUMNAS, *leer_paginas(pdf_path, _movimientos_pagina, progreso))

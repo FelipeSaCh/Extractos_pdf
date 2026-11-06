@@ -1,13 +1,14 @@
 import re
 
-import pdfplumber
-
-from comun_extractos import DELIMITADOR, es_numero_financiero, exportar
+from extractores import Extraccion
+from infraestructura.lectura_pdf import centro_x, es_numero_financiero, leer_paginas
+from nucleo.constantes import DELIMITADOR
 
 COLUMNAS = ["FECHA", "DESCRIPCIÓN", "VALOR", "SALDO"]
 PATRON_FECHA = re.compile(r"^\d{2}/\d{2}/\d{4}$")
 TEXTOS_FIN = ("DEFENSOR CONSUMIDOR", "NEQUI GENERAN", "PUEDES CONSULTAR", "VIGILADO", "SUPERINTENDENCIA")
 ENCABEZADOS = {"FECHA", "DEL", "MOVIMIENTO", "DESCRIPCIÓN", "VALOR", "SALDO"}
+SIN_MOVIMIENTOS = "No se pudieron extraer movimientos del PDF de Nequi."
 
 
 def _movimientos_pagina(page):
@@ -36,7 +37,7 @@ def _movimientos_pagina(page):
             txt = w["text"].strip()
             if not txt or w is ancla or txt.upper() in ENCABEZADOS:
                 continue
-            x = (w["x0"] + w["x1"]) / 2.0
+            x = centro_x(w)
             if x < x_desc:
                 if x < x_fecha and PATRON_FECHA.match(txt):
                     continue
@@ -56,19 +57,5 @@ def _movimientos_pagina(page):
     return lineas
 
 
-def extraer_lineas_extractos_nequi(pdf_path, progreso_callback=None):
-    lineas = []
-    with pdfplumber.open(pdf_path) as pdf:
-        total = len(pdf.pages)
-        for n_pag, page in enumerate(pdf.pages, start=1):
-            lineas += _movimientos_pagina(page)
-            if progreso_callback:
-                progreso_callback(n_pag, total)
-    return lineas
-
-
-def ejecutar_proceso_exportacion(pdf_path, output_excel_path=None, progreso_callback=None):
-    lineas = extraer_lineas_extractos_nequi(pdf_path, progreso_callback)
-    if not lineas:
-        raise ValueError("No se pudieron extraer movimientos del PDF de Nequi.")
-    return exportar(lineas, COLUMNAS, pdf_path, output_excel_path)
+def extraer(pdf_path, progreso=None, **_):
+    return Extraccion(COLUMNAS, *leer_paginas(pdf_path, _movimientos_pagina, progreso))
