@@ -26,6 +26,26 @@ PATRON_PERIODO = re.compile(
 )
 TOLERANCIA = 1
 
+TIPO_EMPLEADOS = "EMPLEADOS"
+TIPO_INDEPENDIENTE = "INDEPENDIENTE"
+TIPOS_PLANILLA = {
+    TIPO_EMPLEADOS: "Planilla de empleados",
+    TIPO_INDEPENDIENTE: "Planilla de independiente",
+}
+OPCIONES = {"tipo_planilla": ("Tipo de planilla", "Seleccione el tipo de planilla de seguridad social:",
+                              TIPOS_PLANILLA, None)}
+
+SALUD, PENSION, ARL, CCF, PARAFISCALES = "SALUD", "PENSION", "ARL", "CCF", "PARAFISCALES"
+_SUBSISTEMA_POR_CODIGO = (
+    (re.compile(r"^(EPS|ESS|EAS|EPSI|EPSIC|RES)"), SALUD),
+    (re.compile(r"^(23\d{4}|25-14)$"), PENSION),
+    (re.compile(r"^14-\d+$"), ARL),
+    (re.compile(r"^CCF"), CCF),
+    (re.compile(r"^(SENA|ICBF)$"), PARAFISCALES),
+)
+_SUBSISTEMA_POR_CATEGORIA = (("EPS", SALUD), ("SALUD", SALUD), ("PENSION", PENSION), ("ARL", ARL),
+                             ("RIESGO", ARL), ("CCF", CCF), ("CAJA", CCF), ("PARAFISCAL", PARAFISCALES))
+
 
 class GeneradorSeguridadSocial(GeneradorArchivoPlano):
     CLASE_SS = "SEGURIDAD_SOCIAL"
@@ -37,10 +57,12 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
     CODPUC_INTERESES_MORA = "530520001"
     CODPUC_CONTRAPARTIDA = "112005001"
     MSG_SIN_CUENTA = "Sin cuenta contable en administradoras.json"
+    CUENTAS_INDEPENDIENTE = {SALUD: "519605001", PENSION: "519605002", ARL: "519605003"}
 
-    def __init__(self, ruta_pdf, ruta_administradoras=RUTA_ADMINISTRADORAS):
+    def __init__(self, ruta_pdf, ruta_administradoras=RUTA_ADMINISTRADORAS, tipo_planilla=TIPO_EMPLEADOS):
         super().__init__(ruta_pdf)
         self.ruta_administradoras = ruta_administradoras
+        self.tipo_planilla = tipo_planilla or TIPO_EMPLEADOS
         self.nit_empresa = ""
         self.advertencias = []
         self._adm = None
@@ -72,6 +94,22 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
             if len(cuentas) == 1:
                 return cuentas[0]
         return ""
+
+    def _subsistema(self, cod, nit):
+        cod = codigo(cod)
+        for patron, subsistema in _SUBSISTEMA_POR_CODIGO:
+            if patron.match(cod):
+                return subsistema
+        categorias = self._adm.loc[(self._adm["nit"] == nit) & (nit != ""), "categoria"]
+        return next((s for cat in categorias for clave, s in _SUBSISTEMA_POR_CATEGORIA if clave in cat), "")
+
+    def _cuenta(self, cod, nit, nombre, subsistema=None):
+        """Cuenta del aporte: en planillas de independiente, salud/pensión/ARL van a las cuentas 5196."""
+        if self.tipo_planilla == TIPO_INDEPENDIENTE:
+            cuenta = self.CUENTAS_INDEPENDIENTE.get(subsistema or self._subsistema(cod, nit))
+            if cuenta:
+                return cuenta
+        return self._buscar_cuenta(cod, nit, nombre)
 
     def _mes_periodo(self, texto, mes_fecha):
         periodos = {normalizar(m["tipo"]): normalizar(m["mes"]) for m in PATRON_PERIODO.finditer(texto)}
@@ -123,7 +161,7 @@ class GeneradorSeguridadSocial(GeneradorArchivoPlano):
             valor, mora = a_float(m["val"]), a_float(m["mora"])
             tercero = nit or self.NIT_ARUS
             nombre = adm or self.NIT_ARUS
-            cuenta = self._buscar_cuenta(m["cod"], nit, adm)
+            cuenta = self._cuenta(m["cod"], nit, adm)
             if not cuenta and valor:
                 sin_cuenta.append(adm or nit or m["cod"])
             if valor:
@@ -191,6 +229,6 @@ class GeneradorPlanillasMultiples(GeneradorSeguridadSocial):
 Generador = GeneradorSeguridadSocial
 
 
-def generador_para(clase, rutas):
-    generadores = [clase(r) for r in rutas]
+def generador_para(clase, rutas, **opciones):
+    generadores = [clase(r, **opciones) for r in rutas]
     return generadores[0] if len(generadores) == 1 else GeneradorPlanillasMultiples(generadores)

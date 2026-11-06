@@ -9,7 +9,8 @@ from infraestructura.lectura_pdf import texto_y_tablas
 from nucleo.config import RUTA_ADMINISTRADORAS
 from nucleo.numeros import a_float
 from nucleo.texto import clave as _clave, codigo as _codigo, normalizar
-from servicios.seguridad_social import TOLERANCIA, GeneradorSeguridadSocial
+from servicios import seguridad_social
+from servicios.seguridad_social import ARL, PENSION, SALUD, TIPO_EMPLEADOS, TOLERANCIA, GeneradorSeguridadSocial
 
 PATRON_LIQ = re.compile(
     r"(?P<ap>\d{4})[-/](?P<mp>\d{1,2})(?:[-/]\d{1,2})?\s+\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?\s+\d+\s+(?P<planilla>\d+)\s+\S+\s+"
@@ -49,6 +50,7 @@ ADMINISTRADORAS_PILA = {
     "ICBF": ("899999239", "ICBF"),
 }
 PROPORCION_SENA = 2 / 5
+OPCIONES = seguridad_social.OPCIONES
 
 
 def _celda(v):
@@ -66,12 +68,13 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
     NOMBRE_OPERADOR = "APORTES EN LINEA"
     CODPUC_SALDOS = ""
     GRUPOS = ("PENSION", "SALUD", "CCF", "RIESGOS", "PARAFISCALES")
+    SUBSISTEMA_GRUPO = {"PENSION": PENSION, "SALUD": SALUD, "RIESGOS": ARL}
     EXTENSIONES_EXCEL = (".xls", ".xlsx", ".xlsm")
     MARCAS_HOJA = ("PLANILLA RESUMEN", "LIQUIDACION DETALLADA")
     MSG_SIN_CUENTA = "Sin tercero o cuenta contable en administradoras.json"
 
-    def __init__(self, ruta_origen, ruta_administradoras=RUTA_ADMINISTRADORAS):
-        super().__init__(ruta_origen, ruta_administradoras)
+    def __init__(self, ruta_origen, ruta_administradoras=RUTA_ADMINISTRADORAS, tipo_planilla=TIPO_EMPLEADOS):
+        super().__init__(ruta_origen, ruta_administradoras, tipo_planilla)
 
     def _leer_excel(self):
         hojas = pd.read_excel(self.ruta_origen, sheet_name=None, header=None, dtype=object)
@@ -167,7 +170,7 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
                 partes = [(cod, valor)]
             for cod_adm, monto in partes:
                 nit, nombre = self._administradora(cod_adm)
-                cuenta = self._buscar_cuenta(cod_adm, nit, nombre)
+                cuenta = self._cuenta(cod_adm, nit, nombre, self.SUBSISTEMA_GRUPO.get(grupo))
                 if not cuenta:
                     sin_cuenta.append(f"{grupo} {cod_adm} {nombre}".strip())
                 filas.append(self._fila(cuenta, nit, nombre or cod_adm, debito=monto))
@@ -177,7 +180,7 @@ class GeneradorAportesEnLinea(GeneradorSeguridadSocial):
         filas = []
         for (cod, nit), r in resumen.items():
             if r["val"]:
-                cuenta = self._buscar_cuenta(cod, nit, r["nombre"])
+                cuenta = self._cuenta(cod, nit, r["nombre"])
                 if not cuenta:
                     sin_cuenta.append(f"{cod} {r['nombre']}")
                 filas.append(self._fila(cuenta, nit, r["nombre"], debito=r["val"]))

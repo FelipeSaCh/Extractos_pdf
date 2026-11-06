@@ -5,6 +5,13 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [2.7.0] - 2026-11-06
+### Añadido
+- Al cargar una planilla de seguridad social (ARUS o Aportes en Línea) se pregunta si es de **empleados** o de **independiente**.
+- Planilla de independiente: salud → 519605001, pensión → 519605002, ARL → 519605003. Intereses de mora, CCF y la contrapartida conservan sus cuentas.
+- Identificación del subsistema por código PILA (EPS…, 23xxxx/25-14, 14-xx, CCF…) o, en su defecto, por la categoría de administradoras.json.
+- 7 pruebas nuevas (107 en total).
+
 ## [2.6.0] - 2026-11-06
 ### Modificado
 - Arquitectura por capas: `nucleo`, `infraestructura`, `extractores`, `servicios` y `presentacion`. `app_gui.py` queda como punto de entrada.
@@ -16,7 +23,11 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - Persistencia de administradoras y de parámetros del plano separada de la interfaz.
 - La conversión a Excel 5.0/95 importa pywin32 sólo al generar el plano.
 
+### Añadido
+- Módulo de pruebas automatizadas (`tests/`, 100 pruebas con pytest; `pip install -r requirements-dev.txt` y `python -m pytest`).
+
 ### Corregido
+- Banco de Bogotá: la marca «FIN MOVIMIENTOS» no se detectaba y el pie de página se pegaba al último movimiento.
 - Movimientos Persona Natural: montos con punto de miles sin decimales (`-$50.000`) se leían como -50.
 - Fechas «dd mmm aaaa» (Persona Natural) quedaban sin año/mes/día en el archivo plano.
 - El tipo de documento Bancolombia se toma del botón usado, no sólo del nombre del archivo.

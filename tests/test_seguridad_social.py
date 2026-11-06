@@ -117,3 +117,63 @@ def test_aportes_en_linea_sin_hoja_resumen(tmp_path, ruta_administradoras):
     pd.DataFrame([["otra cosa"]]).to_excel(ruta, header=False, index=False)
     with pytest.raises(ValueError, match="Planilla Resumen"):
         aportes_en_linea.GeneradorAportesEnLinea(str(ruta), ruta_administradoras).preparar()
+
+
+# ---------------------------------------------------------------- planilla de independiente
+def test_arus_independiente_cuentas_5196(texto_planilla, ruta_administradoras):
+    gen = GeneradorSeguridadSocial(texto_planilla("a.pdf", TEXTO_ARUS), ruta_administradoras,
+                                   tipo_planilla=seguridad_social.TIPO_INDEPENDIENTE)
+    df = gen.calcular(gen.preparar(), "", 1).set_index("nombre")
+    assert df.loc["SALUD TOTAL", "codpuc"] == "519605001"
+    pension = df.loc["PORVENIR"].set_index("codpuc")
+    assert pension.loc["519605002", "debito"] == 2000000 and pension.loc["530520001", "debito"] == 15300
+    assert df.loc["ARL SURA", "codpuc"] == "519605003"
+    assert df.loc["COMFAMA", "codpuc"] == "237010001"
+    assert df.loc["ENLACE OPERATIVO", "codpuc"] == "112005001"
+
+
+def test_arus_empleados_por_defecto(texto_planilla, ruta_administradoras):
+    gen = GeneradorSeguridadSocial(texto_planilla("a.pdf", TEXTO_ARUS), ruta_administradoras)
+    assert gen.tipo_planilla == seguridad_social.TIPO_EMPLEADOS
+    assert not gen.preparar()["codpuc_auto"].str.startswith("5196").any()
+
+
+def test_independiente_sin_cuenta_en_administradoras(texto_planilla, ruta_administradoras):
+    texto = TEXTO_ARUS.replace("N890903790 14-11 ARL SURA", "N860011153 14-23 POSITIVA")
+    gen = GeneradorSeguridadSocial(texto_planilla("a.pdf", texto), ruta_administradoras,
+                                   tipo_planilla=seguridad_social.TIPO_INDEPENDIENTE)
+    lin = gen.preparar()
+    assert gen.advertencias == [] and lin.loc[lin["nombre"] == "POSITIVA", "codpuc_auto"].iloc[0] == "519605003"
+
+
+def test_subsistema_por_categoria(texto_planilla, ruta_administradoras):
+    gen = GeneradorSeguridadSocial("x.pdf", ruta_administradoras)
+    gen._cargar_administradoras()
+    assert gen._subsistema("XYZ", "800130907") == seguridad_social.SALUD
+    assert gen._subsistema("25-14", "") == seguridad_social.PENSION
+    assert gen._subsistema("CCF04", "") == seguridad_social.CCF
+
+
+def test_aportes_en_linea_independiente(planilla_aportes, ruta_administradoras):
+    gen = aportes_en_linea.GeneradorAportesEnLinea(planilla_aportes, ruta_administradoras,
+                                                   tipo_planilla=seguridad_social.TIPO_INDEPENDIENTE)
+    cuentas = gen.calcular(gen.preparar(), "", 1).groupby("codpuc")["debito"].sum()
+    assert cuentas["519605001"] == 1234000 and cuentas["519605002"] == 2000000 and cuentas["519605003"] == 52200
+
+
+def test_planillas_multiples_independiente(texto_planilla, ruta_administradoras):
+    texto_planilla("a.pdf", TEXTO_ARUS)
+    texto_planilla("b.pdf", TEXTO_ARUS.replace("8812345", "8812399"))
+    gen = generador_para(GeneradorSeguridadSocial, ["a.pdf", "b.pdf"],
+                         tipo_planilla=seguridad_social.TIPO_INDEPENDIENTE)
+    gen.generadores = [GeneradorSeguridadSocial(g.ruta_origen, ruta_administradoras, g.tipo_planilla)
+                       for g in gen.generadores]
+    assert (gen.preparar()["codpuc_auto"] == "519605001").sum() == 2
+
+
+def test_opciones_de_planilla_registradas():
+    from servicios.fuentes import FUENTES
+    for nombre in ("Seguridad social (ARUS)", "Seguridad social (Aportes en Línea)"):
+        titulo, texto, opciones, detectar = FUENTES[nombre].opciones()["tipo_planilla"]
+        assert set(opciones) == {seguridad_social.TIPO_EMPLEADOS, seguridad_social.TIPO_INDEPENDIENTE}
+        assert detectar is None

@@ -33,6 +33,7 @@ class PDFViewerApp:
         self.trabajador = TrabajadorEnSegundoPlano(self.root)
         self.tipo_documento = BTN_EXTRACTO
         self.ultimo_excel = None
+        self.opciones_planilla = {}
         self._photo_images = []
         self._editor_adm = None
 
@@ -271,6 +272,12 @@ class PDFViewerApp:
         if not fuente:
             return
         es_ss = prefijo_tipo == BTN_PLANILLA
+        if es_ss:
+            if not self._modulo_disponible(fuente):
+                return
+            self.opciones_planilla = self._pedir_opciones(fuente)
+            if self.opciones_planilla is None:
+                return
         acepta_excel = es_ss and fuente.acepta_excel
         titulo = f"Seleccionar {'PDF o Excel' if acepta_excel else 'PDF'} de {prefijo_tipo} (puede elegir varias)"
         tipos = [("PDF o Excel", "*.pdf;*.xlsx;*.xls")] if acepta_excel else [("Archivos PDF", "*.pdf")]
@@ -342,12 +349,12 @@ class PDFViewerApp:
     # ------------------------------------------------------------------
     # Extracción
     # ------------------------------------------------------------------
-    def _pedir_opciones(self, fuente, ruta):
+    def _pedir_opciones(self, fuente, ruta=None):
         """Solicita las opciones que declara el extractor (p. ej. tipo de cuenta Davivienda). None = cancelado."""
         elegidas = {}
         for parametro, (titulo, texto, opciones, detectar) in fuente.opciones().items():
             try:
-                sugerida = detectar(ruta)
+                sugerida = detectar(ruta) if detectar and ruta else None
             except Exception:
                 sugerida = None
             valor = elegir_opcion(self.root, titulo, texto, opciones, sugerida)
@@ -456,8 +463,8 @@ class PDFViewerApp:
         from servicios.seguridad_social import generador_para
 
         rutas = rutas or [self.pdf_engine.current_path]
-        ruta = generar_plano_con_dialogo(self.root, rutas[0], generador=generador_para(fuente.generador(), rutas),
-                                         confirmar=False, pedir_ruta=True)
+        generador = generador_para(fuente.generador(), rutas, **self.opciones_planilla)
+        ruta = generar_plano_con_dialogo(self.root, rutas[0], generador=generador, confirmar=False, pedir_ruta=True)
         if ruta:
             self._registrar_excel(ruta)
             self._estado(f"✅ Plano generado:\n{os.path.basename(ruta)}", ok=True)
