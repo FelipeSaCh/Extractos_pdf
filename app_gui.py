@@ -2,6 +2,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, simpledialog
 import pandas as pd
+import webbrowser
 from pdf_engine import (
     PDFEngine,
     PDFPasswordRequiredError,
@@ -344,6 +345,13 @@ class PDFViewerApp:
             style="Secondary.TButton",
             cursor="hand2",
         ).pack(fill=tk.X, pady=6)
+
+        ttk.Button(
+            left_frame, 
+            text="Abrir manual 📒", 
+            style="Accent.TButton",
+            command=lambda: webbrowser.open("https://drive.google.com/file/d/1ZB5-3KT_-2bJmo7G-uYIlwJhnN-BihQP/view?usp=sharing")
+        ).pack(side="left", padx=(0, 10))
 
         ttk.Separator(left_frame, orient="horizontal").pack(fill=tk.X, pady=18)
 
